@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Sanctum: Private Manga Tracker",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAo8vOIEsatCrqP2KxK1WtsNN+mTy4HOhLXd0H5RWj9xW5jZPBwDaYqPP888DvCDSkeg29Hx90nJs7i4P9o/ID/q74fy5hO6bNonysUNesMTaRPJCUTne878zUulZmSDhDPkk7Y6jhPIUHkZxmHK2zQai959rwLtUSynzsYSi3O5jU3ndWlddGUXKIcroyVkk3BaYqFG4Kaku5BDuCg2F8yVQMhIcfNVaazFJzLrxV+btzySkomiPl/6tLLFAfZ4/F5NnCNtcB22axmY0T2hHwsf8yHtmXwo9cvreBYW5LeaiqDtb5W0LBl7Ev9/nE8sxeo08FJ3VNF7nae9KVdqECIQIDAQAB",
+  "version": "1.0",
+  "description": "Privacy-first manga history sync using your personal Google Drive.",
+  "permissions": ["identity", "storage"],
+  "host_permissions": [
+    "https://*.asuracomic.net/*",
+    "https://www.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "497261885556-4amuijub3q7q1aju157029prakjebahp.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/drive.file"]
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.asuracomic.net/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
