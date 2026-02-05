@@ -56,6 +56,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     })();
     return true;
   }
+
+  // Add this inside your chrome.runtime.onMessage.addListener block
+  if (message.type === "DELETE_SERIES") {
+    (async () => {
+      try {
+        const tokenObj = await chrome.identity.getAuthToken({
+          interactive: true,
+        });
+        const token = tokenObj.token;
+        const fileId = await findFile(token);
+
+        if (fileId) {
+          const response = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+            {
+              headers: { Authorization: `Bearer ${token}` },
+            },
+          );
+          let data = await response.json();
+
+          // Remove the specific series
+          delete data.series[message.payload.manga];
+
+          await fetch(
+            `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+            {
+              method: "PATCH",
+              headers: { Authorization: `Bearer ${token}` },
+              body: JSON.stringify(data),
+            },
+          );
+
+          sendResponse({ status: "success" });
+        }
+      } catch (err) {
+        console.error("[Sanctum] Delete Failed:", err);
+        sendResponse({ status: "error" });
+      }
+    })();
+    return true; // Keep channel open for sendResponse
+  }
 });
 
 async function findFile(token) {
