@@ -7,6 +7,8 @@
   "permissions": ["identity", "storage"],
   "host_permissions": [
     "https://*.asuracomic.net/*",
+    "https://*.mangahere.cc/*",
+    "https://*.mangadex.org/*",
     "https://www.googleapis.com/*"
   ],
   "oauth2": {
@@ -18,7 +20,11 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://*.asuracomic.net/*"],
+      "matches": [
+        "https://*.asuracomic.net/*",
+        "https://*.mangahere.cc/*",
+        "https://*.mangadex.org/*"
+      ],
       "js": ["content.js"],
       "run_at": "document_idle"
     }
