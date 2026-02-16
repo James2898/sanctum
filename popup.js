@@ -2,8 +2,10 @@ const listElement = document.getElementById("list");
 const loadingElement = document.getElementById("loading");
 const statusElement = document.getElementById("status");
 const refreshBtn = document.getElementById("refresh-btn");
+const searchInput = document.getElementById("search-field");
 const IS_DEV_MODE = true;
 
+let allSeries = [];
 const mockData = {
   series: {
     "childhood friend of the zenith": {
@@ -115,6 +117,8 @@ const renderList = (series) => {
     listElement.innerHTML =
       "<div class='status'>Vault is empty. Start reading!</div>";
   }
+
+  listElement.innerHTML = "";
 
   series.forEach(([name, info]) => {
     const card = document.createElement("div");
@@ -252,6 +256,17 @@ const loadVault = async () => {
   }
 };
 
+// Search Field
+searchInput.addEventListener("input", (e) => {
+  const searchText = e.target.value.toLowerCase();
+  const filteredSeries = allSeries.filter(([name]) =>
+    name.toLowerCase().includes(searchText),
+  );
+
+  renderList(filteredSeries);
+});
+
+// Refresh Button
 refreshBtn.addEventListener("click", () => {
   refreshBtn.classList.add("spinning");
   listElement.innerHTML = "";
