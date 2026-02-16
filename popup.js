@@ -72,6 +72,10 @@ document.addEventListener("DOMContentLoaded", async () => {
           siteTag = "MH";
           tagColor = "rgb(231, 49, 255)";
         }
+        if (info.url.includes("mangaplus")) {
+          siteTag = "MP";
+          tagColor = "rgb(0, 0, 0)";
+        }
       }
 
       card.innerHTML = `

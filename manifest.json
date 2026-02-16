@@ -9,7 +9,8 @@
     "https://*.asuracomic.net/*",
     "https://*.mangahere.cc/*",
     "https://*.mangadex.org/*",
-    "https://www.googleapis.com/*"
+    "https://www.googleapis.com/*",
+    "https://mangaplus.shueisha.co.jp/*"
   ],
   "oauth2": {
     "client_id": "497261885556-4amuijub3q7q1aju157029prakjebahp.apps.googleusercontent.com",
@@ -23,7 +24,8 @@
       "matches": [
         "https://*.asuracomic.net/*",
         "https://*.mangahere.cc/*",
-        "https://*.mangadex.org/*"
+        "https://*.mangadex.org/*",
+        "https://mangaplus.shueisha.co.jp/*"
       ],
       "js": ["content.js"],
       "run_at": "document_idle"
