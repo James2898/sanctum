@@ -13,10 +13,54 @@
       h2 {
         font-size: 18px;
         color: #7d42ff;
-        border-bottom: 1px solid #333;
-        padding-bottom: 10px;
+        /* border-bottom: 1px solid #333; */
+        /* padding-bottom: 10px; */
+      }
+
+      #header {
+        display: flex;
+        align-items: center;
+        border-bottom: 1px #333;
+        justify-content: space-between;
+
         margin-top: 0;
       }
+
+      #refresh-btn {
+        background: none;
+        border: none;
+        color: #7d42ff;
+        align-items: center;
+        cursor: pointer;
+        padding: 0;
+        display: flex;
+        transition:
+          color 0.2s,
+          transform 0.2s;
+      }
+
+      #refresh-btn img {
+        width: 24px;
+        height: 24px;
+      }
+
+      #refresh-btn:hover {
+        transform: scale(1.1);
+      }
+
+      .spinning {
+        animation: spin 1s linear infinite;
+      }
+
+      @keyframes spin {
+        from {
+          transform: rotate(0deg);
+        }
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
       .series-list {
         max-height: 400px;
         overflow-y: auto;
@@ -88,7 +132,12 @@
     </style>
   </head>
   <body>
-    <h2>🛡️ Sanctum Vault</h2>
+    <div id="header">
+      <h2>🛡️ Sanctum Vault</h2>
+      <button id="refresh-btn">
+        <img src="refresh.svg" />
+      </button>
+    </div>
     <div id="loading">Fetching your records...</div>
     <div id="list" class="series-list"></div>
     <div class="status" id="status">Syncing with Google Drive...</div>
