@@ -1,8 +1,9 @@
-document.addEventListener("DOMContentLoaded", async () => {
-  const listElement = document.getElementById("list");
-  const loadingElement = document.getElementById("loading");
-  const statusElement = document.getElementById("status");
+const listElement = document.getElementById("list");
+const loadingElement = document.getElementById("loading");
+const statusElement = document.getElementById("status");
+const refreshBtn = document.getElementById("refresh-btn");
 
+const loadVault = async () => {
   try {
     // 1. Get the token
     const tokenObj = await chrome.identity.getAuthToken({ interactive: true });
@@ -127,4 +128,22 @@ document.addEventListener("DOMContentLoaded", async () => {
     loadingElement.innerText = "Error accessing Vault.";
     statusElement.innerText = "Check your connection.";
   }
+};
+
+refreshBtn.addEventListener("click", () => {
+  refreshBtn.classList.add("spinning");
+  listElement.innerHTML = "";
+  listElement.scrollTop = 0;
+  loadingElement.style.display = "block";
+  loadingElement.innerText = "Fetching you records...";
+
+  loadVault().finally(() => {
+    setTimeout(() => {
+      refreshBtn.classList.remove("spinning");
+    }, 500);
+  });
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadVault();
 });
