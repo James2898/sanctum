@@ -15,23 +15,38 @@ const SITE_CONFIGS = {
   "mangadex.org": {
     regex: /chapter\/([^\/]+)/,
     getTitle: () => {
-      // Targeted selector for the element you found
       const titleEl = document.querySelector("a.reader--header-manga");
       return titleEl ? titleEl.innerText.trim() : null;
     },
     getChapter: () => {
       const chapterEl = document.querySelector("div.reader--meta.chapter");
-      console.log(chapterEl);
-      console.log(chapterEl ? chapterEl.innerText.match(/[\d\.]+/) : "xxx");
       if (chapterEl) {
-        // 2. We want to match one or more digits,
-        // optionally followed by a dot and more digits (for 31.5)
         const match = chapterEl.innerText.match(/(\d+(\.\d+)?)/);
-
-        // Return the first capture group (the number) or a fallback string
         return match && match[0] ? match[0] : "Reading";
       }
-
+      return "Reading";
+    },
+  },
+  "mangaplus.shueisha.co.jp": {
+    // MangaPlus URLs are just /viewer/12345
+    regex: /viewer\/(\d+)/,
+    getTitle: () => {
+      // Using the class you found
+      const titleEl = document.querySelector(
+        "h1[class*='Navigation-module_title']",
+      );
+      return titleEl ? titleEl.innerText.trim() : null;
+    },
+    getChapter: () => {
+      // Using the class you found for chapter
+      const chapterEl = document.querySelector(
+        "p[class*='Navigation-module_chapterTitle']",
+      );
+      if (chapterEl) {
+        // Extracts the number from strings like "#070"
+        const match = chapterEl.innerText.match(/(\d+)/);
+        return match ? parseInt(match[0], 10) : "Reading";
+      }
       return "Reading";
     },
   },
@@ -45,9 +60,6 @@ if (config) {
     const path = window.location.pathname;
     const match = path.match(config.regex);
 
-    console.log(path);
-    console.log(config.regex);
-    console.log(match == true);
     if (match) {
       const mangaTitle = config.titleIndex
         ? config.getTitle(match)
@@ -56,13 +68,9 @@ if (config) {
         ? match[config.chapterIndex]
         : config.getChapter();
 
-      console.log(mangaTitle, " : ", chapterNumber);
-
-      // If MangaDex title isn't loaded yet, retry up to 5 times
-      if (!mangaTitle && retries < 5) {
-        console.log(
-          `[Sanctum] Title not found, retrying... (${retries + 1}/5)`,
-        );
+      // Retry logic if title isn't loaded yet (common in SPAs like MangaPlus/MangaDex)
+      if (!mangaTitle && retries < 8) {
+        console.log(`[Sanctum] Waiting for title... retry ${retries + 1}/8`);
         setTimeout(() => checkPage(retries + 1), 1000);
         return;
       }
