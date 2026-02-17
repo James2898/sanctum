@@ -62,7 +62,6 @@
       #search-container {
         display: flex;
         margin-bottom: 10px;
-        border: 1px solid #7d42ff;
         border-radius: 2%;
       }
 
@@ -90,6 +89,12 @@
       #search-field {
         width: 100%;
         border: none;
+      }
+
+      #search-field:focus {
+        outline: none;
+        border: 1px solid #7d42ff;
+        box-shadow: 0 0 5px rgba(125, 66, 255, 0.2);
       }
 
       .series-list {
@@ -123,13 +128,22 @@
         align-items: center;
       }
       .btn-read {
-        background: #7d42ff;
         color: white;
         text-decoration: none;
         padding: 4px 10px;
         border-radius: 4px;
-        font-size: 11px;
+        transition: transform 0.2s;
       }
+
+      .btn-read img:hover {
+        transform: scale(1.2);
+      }
+
+      .btn-read img {
+        width: 24px;
+        height: 24px;
+      }
+
       .status {
         font-size: 10px;
         color: #666;
@@ -143,12 +157,17 @@
         font-size: 11px;
         cursor: pointer;
         padding: 0;
-        margin-left: 10px;
-        text-decoration: underline;
+        transition: transform 0.2;
       }
-      .btn-delete:hover {
-        color: #ff1a1a;
+      .btn-delete img:hover {
+        transform: scale(1.2);
       }
+
+      .btn-delete img {
+        width: 24px;
+        height: 24px;
+      }
+
       .manga-actions {
         display: flex;
         align-items: center;
