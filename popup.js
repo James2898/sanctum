@@ -140,19 +140,19 @@ const renderList = (series) => {
     var tagColor = "#27ae60";
     if (info.url) {
       if (info.url.includes("mangadex")) {
-        siteTag = "MD"; // Shortened for better fit next to chapter
+        siteTag = "Mangadex"; // Shortened for better fit next to chapter
         tagColor = "#ff6740";
       }
       if (info.url.includes("asuracomic")) {
-        siteTag = "AS";
+        siteTag = "AsuraScans";
         tagColor = "#7d42ff";
       }
       if (info.url.includes("mangahere")) {
-        siteTag = "MH";
+        siteTag = "Mangahere";
         tagColor = "rgb(231, 49, 255)";
       }
       if (info.url.includes("mangaplus")) {
-        siteTag = "MP";
+        siteTag = "MangaPlus";
         tagColor = "rgb(0, 0, 0)";
       }
     }
@@ -165,13 +165,17 @@ const renderList = (series) => {
     
     <div class="manga-info" style="display: flex; align-items: center; justify-content: space-between;">
       <div style="display: flex; align-items: center; gap: 6px;">
-        <span style="font-size:9px; padding:1px 4px; border-radius:3px; background:${tagColor}; color:white; font-weight: bold;">${siteTag}</span>
+        <span style="font-size:12px; padding:1px 4px; background:none; color:${tagColor}; font-weight: bold;">${siteTag}</span>
         <span style="font-size: 13px;">Chapter ${info.chapter}</span>
       </div>
       
       <div class="manga-actions">
-        <a href="${info.url}" target="_blank" class="btn-read">Continue</a>
-        <button class="btn-delete" data-manga="${name}">X</button>
+        <a href="${info.url}" target="_blank" class="btn-read">
+          <img src="arrow-right.svg" />
+        </a>
+        <button class="btn-delete" data-manga="${name}">
+          <img src="trash.svg" /> 
+        </button>
       </div>
     </div>
   `;
