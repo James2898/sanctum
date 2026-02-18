@@ -3,7 +3,7 @@ const loadingElement = document.getElementById("loading");
 const statusElement = document.getElementById("status");
 const refreshBtn = document.getElementById("refresh-btn");
 const searchInput = document.getElementById("search-field");
-const IS_DEV_MODE = true;
+const IS_DEV_MODE = false;
 
 let allSeries = [];
 const mockData = {
@@ -248,9 +248,11 @@ const loadVault = async () => {
 
     // 4. Render the Dashboard
     loadingElement.style.display = "none";
-    const series = Object.entries(data.series).sort((a, b) =>
+    allSeries = Object.entries(data.series).sort((a, b) =>
       a[0].localeCompare(b[0]),
     );
+
+    renderList(allSeries);
 
     statusElement.innerText = `Last updated: ${new Date().toLocaleTimeString()}`;
   } catch (err) {
