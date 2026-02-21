@@ -4,6 +4,7 @@ const statusElement = document.getElementById("status");
 const refreshBtn = document.getElementById("refresh-btn");
 const searchInput = document.getElementById("search-field");
 const mangaPreview = document.getElementById("manga-preview");
+const previewImage = document.getElementById("preview-img");
 const IS_DEV_MODE = false;
 
 let allSeries = [];
@@ -12,6 +13,8 @@ const mockData = {
     "childhood friend of the zenith": {
       chapter: "93",
       url: "https://asuracomic.net/series/childhood-friend-of-the-zenith-a137c072/chapter/93",
+      cover:
+        "https://gg.asuracomic.net/storage/media/292/conversions/01J6AR9XJKAQHET3AJYG9YPZ57-optimized.webp",
       updated: "2026-02-15T09:18:35.046Z",
     },
     "dead tube": {
@@ -52,6 +55,8 @@ const mockData = {
     "Ookii Muki Muki Chiisai Muchi Muchi": {
       chapter: "32",
       url: "https://mangadex.org/chapter/fd0a8958-479d-41e7-a8ff-28562c55aca6/14",
+      cover:
+        "https://mangadex.org/covers/eac2e293-e6ff-46f9-af78-bd6bba824ad1/121e7723-92c4-4b84-89bd-fb31b2152f96.jpg",
       updated: "2026-02-10T23:47:35.711Z",
     },
     "raising villains the right way": {
@@ -187,21 +192,25 @@ const renderList = (series) => {
 
     // Art Cover Preview Function
     const titleEl = card.querySelector(".manga-title");
+    if (info.cover) {
+      // Todo: Fix Performance Issue on 100+ logs
+      titleEl.addEventListener("mouseenter", (e) => {
+        mangaPreview.style.display = "block";
+        previewImage.src = info.cover;
+      });
 
-    // Todo: Fix Performance Issue on 100+ logs
-    titleEl.addEventListener("mouseenter", (e) => {
-      mangaPreview.style.display = "block";
-    });
+      titleEl.addEventListener("mousemove", (e) => {
+        const offset = 100;
+        mangaPreview.style.left = e.clientX + "px";
+        mangaPreview.style.top = e.clientY - offset + "px";
+      });
 
-    titleEl.addEventListener("mousemove", (e) => {
-      const offset = 100;
-      mangaPreview.style.left = e.clientX + "px";
-      mangaPreview.style.top = e.clientY - offset + "px";
-    });
-
-    titleEl.addEventListener("mouseleave", () => {
-      mangaPreview.style.display = "none";
-    });
+      titleEl.addEventListener("mouseleave", () => {
+        mangaPreview.style.display = "none";
+      });
+    } else {
+      titleEl.classList.add("no-cover");
+    }
 
     // Delete Function
     card.querySelector(".btn-delete").addEventListener("click", function () {
