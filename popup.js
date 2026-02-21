@@ -284,6 +284,8 @@ refreshBtn.addEventListener("click", () => {
   loadingElement.style.display = "block";
   loadingElement.innerText = "Fetching you records...";
 
+  searchInput.value = "";
+
   loadVault().finally(() => {
     setTimeout(() => {
       refreshBtn.classList.remove("spinning");
