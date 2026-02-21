@@ -140,7 +140,7 @@ const renderList = (series) => {
     var tagColor = "#27ae60";
     if (info.url) {
       if (info.url.includes("mangadex")) {
-        siteTag = "Mangadex"; // Shortened for better fit next to chapter
+        siteTag = "Mangadex";
         tagColor = "#ff6740";
       }
       if (info.url.includes("asuracomic")) {
@@ -154,6 +154,10 @@ const renderList = (series) => {
       if (info.url.includes("mangaplus")) {
         siteTag = "MangaPlus";
         tagColor = "rgb(0, 0, 0)";
+      }
+      if (info.url.includes("kunmanga")) {
+        siteTag = "KunManga";
+        tagColor = "rgb(1, 255, 183)";
       }
     }
 

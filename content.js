@@ -50,6 +50,16 @@ const SITE_CONFIGS = {
       return "Reading";
     },
   },
+  "kunmanga.com": {
+    regex: /manga\/([^\/]+)\/([^\/]+)/,
+    titleIndex: 1,
+    chapterIndex: 2,
+    getTitle: (match) => match[1].replace(/-/g, " "),
+    getChapter: (match) => {
+      const numMatch = match[2].match(/[\d\.]+/);
+      return numMatch && numMatch[0] ? numMatch[0] : "Reading";
+    },
+  },
 };
 
 const domain = window.location.hostname.replace("www.", "");
@@ -64,9 +74,9 @@ if (config) {
       const mangaTitle = config.titleIndex
         ? config.getTitle(match)
         : config.getTitle();
-      const chapterNumber = config.chapterIndex
-        ? match[config.chapterIndex]
-        : config.getChapter();
+      const chapterNumber = config.getChapter
+        ? config.getChapter(match)
+        : match[config.chapterIndex];
 
       // Retry logic if title isn't loaded yet (common in SPAs like MangaPlus/MangaDex)
       if (!mangaTitle && retries < 8) {
