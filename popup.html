@@ -127,6 +127,17 @@
         justify-content: space-between;
         align-items: center;
       }
+      #manga-preview {
+        display: none;
+        position: fixed;
+        pointer-events: none;
+        z-index: 9999;
+      }
+      #preview-img {
+        width: 150px;
+        border-radius: 8px;
+        border: 2px solid #7d42ff;
+      }
       .btn-read {
         color: white;
         text-decoration: none;
@@ -198,6 +209,12 @@
     <div id="list" class="series-list"></div>
     <div class="status" id="status">Syncing with Google Drive...</div>
 
+    <div id="manga-preview">
+      <img
+        id="preview-img"
+        src="https://mangadex.org/covers/a77742b1-befd-49a4-bff5-1ad4e6b0ef7b/d34fa144-0e6c-4f1a-8bd4-90e91eb5b3cf.jpg"
+      />
+    </div>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -3,6 +3,7 @@ const loadingElement = document.getElementById("loading");
 const statusElement = document.getElementById("status");
 const refreshBtn = document.getElementById("refresh-btn");
 const searchInput = document.getElementById("search-field");
+const mangaPreview = document.getElementById("manga-preview");
 const IS_DEV_MODE = false;
 
 let allSeries = [];
@@ -184,7 +185,25 @@ const renderList = (series) => {
     </div>
   `;
 
-    // ... (Keep your existing Delete Click listener here)
+    // Art Cover Preview Function
+    const titleEl = card.querySelector(".manga-title");
+
+    // Todo: Fix Performance Issue on 100+ logs
+    titleEl.addEventListener("mouseenter", (e) => {
+      mangaPreview.style.display = "block";
+    });
+
+    titleEl.addEventListener("mousemove", (e) => {
+      const offset = 100;
+      mangaPreview.style.left = e.clientX + "px";
+      mangaPreview.style.top = e.clientY - offset + "px";
+    });
+
+    titleEl.addEventListener("mouseleave", () => {
+      mangaPreview.style.display = "none";
+    });
+
+    // Delete Function
     card.querySelector(".btn-delete").addEventListener("click", function () {
       const mangaName = this.getAttribute("data-manga");
       if (confirm(`Delete ${mangaName} from your history?`)) {
