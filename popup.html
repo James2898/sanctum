@@ -97,6 +97,12 @@
         box-shadow: 0 0 5px rgba(125, 66, 255, 0.2);
       }
 
+      #filter-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
       .series-list {
         max-height: 400px;
         overflow-y: auto;
@@ -207,6 +213,18 @@
       <button id="search-btn">
         <img src="magnify.svg" />
       </button>
+    </div>
+    <div id="filter-container">
+      <input type="radio" value="all" name="filter" checked />
+      <p>All</p>
+      <input type="radio" value="asura" name="filter" />
+      <p>Asura</p>
+      <input type="radio" value="mangahere" name="filter" />
+      <p>Mangahere</p>
+      <input type="radio" value="mangadex" name="filter" />
+      <p>Mangadex</p>
+      <input type="radio" value="mangaplus" name="filter" />
+      <p>Mangaplus</p>
     </div>
     <div id="loading">Fetching your records...</div>
     <div id="list" class="series-list"></div>
