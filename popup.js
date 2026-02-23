@@ -5,7 +5,7 @@ const refreshBtn = document.getElementById("refresh-btn");
 const searchInput = document.getElementById("search-field");
 const mangaPreview = document.getElementById("manga-preview");
 const previewImage = document.getElementById("preview-img");
-const IS_DEV_MODE = false;
+const filterContainer = document.getElementById("filter-container");
 
 let allSeries = [];
 const mockData = {
@@ -302,6 +302,21 @@ searchInput.addEventListener("input", (e) => {
   );
 
   renderList(filteredSeries);
+});
+
+// Filter By Mangasites
+filterContainer.addEventListener("change", (e) => {
+  console.log(e.target.name);
+  console.log(e.target.value);
+  if (e.target.name === "filter") {
+    const filter = e.target.value;
+
+    const filteredSeries = allSeries.filter((data) =>
+      data[1].url.toLowerCase().includes(filter),
+    );
+
+    renderList(filteredSeries);
+  }
 });
 
 // Refresh Button
