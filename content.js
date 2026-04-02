@@ -1,6 +1,6 @@
 const SITE_CONFIGS = {
-  "asuracomic.net": {
-    regex: /series\/([^\/]+)\/chapter\/(\d+)/,
+  "asurascans.com": {
+    regex: /comics\/([^\/]+)\/chapter\/(\d+)/,
     titleIndex: 1,
     chapterIndex: 2,
     getTitle: (match) =>

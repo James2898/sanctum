@@ -6,7 +6,7 @@
 
 - **Privacy-First:** No third-party databases. Your history is stored in a secure `sanctum_history.json` file on your own Google Drive.
 - **Multi-Site Support:**
-  - **Asura Scans** (`asuracomic.net`)
+  - **Asura Scans** (`asurascans.com`)
   - **MangaDex** (`mangadex.org`) - Includes full SPA (Single Page Application) support.
   - **MangaHere** (`mangahere.cc`)
 - **Fast Sync:** Progress is recorded after just **3 seconds** of activity.

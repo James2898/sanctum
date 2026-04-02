@@ -6,15 +6,16 @@ const searchInput = document.getElementById("search-field");
 const mangaPreview = document.getElementById("manga-preview");
 const previewImage = document.getElementById("preview-img");
 const filterContainer = document.getElementById("filter-container");
+const IS_DEV_MODE = false;
 
 let allSeries = [];
 const mockData = {
   series: {
     "childhood friend of the zenith": {
       chapter: "93",
-      url: "https://asuracomic.net/series/childhood-friend-of-the-zenith-a137c072/chapter/93",
+      url: "https://asurascans.com/series/childhood-friend-of-the-zenith-a137c072/chapter/93",
       cover:
-        "https://gg.asuracomic.net/storage/media/292/conversions/01J6AR9XJKAQHET3AJYG9YPZ57-optimized.webp",
+        "https://gg.asurascans.com/storage/media/292/conversions/01J6AR9XJKAQHET3AJYG9YPZ57-optimized.webp",
       updated: "2026-02-15T09:18:35.046Z",
     },
     "dead tube": {
@@ -61,7 +62,7 @@ const mockData = {
     },
     "raising villains the right way": {
       chapter: "226",
-      url: "https://asuracomic.net/series/raising-villains-the-right-way-d53bec38/chapter/222",
+      url: "https://asurascans.com/series/raising-villains-the-right-way-d53bec38/chapter/222",
       updated: "2026-02-15T09:23:52.790Z",
     },
     "shangri la frontier": {
@@ -81,17 +82,17 @@ const mockData = {
     },
     "the knight king who returned with a god": {
       chapter: "150",
-      url: "https://asuracomic.net/series/the-knight-king-who-returned-with-a-god-059bea61/chapter/150",
+      url: "https://asurascans.com/series/the-knight-king-who-returned-with-a-god-059bea61/chapter/150",
       updated: "2026-02-11T23:49:01.206Z",
     },
     "the max level hero has returned": {
       chapter: "226",
-      url: "https://asuracomic.net/series/the-max-level-hero-has-returned-16db2f56/chapter/226",
+      url: "https://asurascans.com/series/the-max-level-hero-has-returned-16db2f56/chapter/226",
       updated: "2026-02-05T03:37:40.159Z",
     },
     "the ultimate shut in": {
       chapter: "7",
-      url: "https://asuracomic.net/series/the-ultimate-shut-in-1c94d41f/chapter/7",
+      url: "https://asurascans.com/series/the-ultimate-shut-in-1c94d41f/chapter/7",
       updated: "2026-02-05T03:37:17.512Z",
     },
     "Toru ni Taranai": {
@@ -149,7 +150,7 @@ const renderList = (series) => {
         siteTag = "Mangadex";
         tagColor = "#ff6740";
       }
-      if (info.url.includes("asuracomic")) {
+      if (info.url.includes("asurascans")) {
         siteTag = "AsuraScans";
         tagColor = "#7d42ff";
       }

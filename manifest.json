@@ -6,7 +6,7 @@
   "description": "Privacy-first manga history sync using your personal Google Drive.",
   "permissions": ["identity", "storage"],
   "host_permissions": [
-    "https://*.asuracomic.net/*",
+    "https://*.asurascans.com/*",
     "https://*.mangahere.cc/*",
     "https://*.mangadex.org/*",
     "https://www.googleapis.com/*",
@@ -23,7 +23,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://*.asuracomic.net/*",
+        "https://*.asurascans.com/*",
         "https://*.mangahere.cc/*",
         "https://*.mangadex.org/*",
         "https://mangaplus.shueisha.co.jp/*",
