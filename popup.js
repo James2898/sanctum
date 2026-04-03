@@ -327,8 +327,6 @@ refreshBtn.addEventListener("click", () => {
   listElement.innerHTML = "";
   listElement.scrollTop = 0;
   loadingElement.style.display = "block";
-  loadingElement.innerText = "Fetching you records...";
-
   searchInput.value = "";
 
   loadVault().finally(() => {
