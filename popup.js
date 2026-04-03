@@ -307,14 +307,15 @@ searchInput.addEventListener("input", (e) => {
 
 // Filter By Mangasites
 filterContainer.addEventListener("change", (e) => {
-  console.log(e.target.name);
-  console.log(e.target.value);
   if (e.target.name === "filter") {
     const filter = e.target.value;
 
-    const filteredSeries = allSeries.filter((data) =>
-      data[1].url.toLowerCase().includes(filter),
-    );
+    let filteredSeries = allSeries;
+    if (filter !== "all") {
+      filteredSeries = allSeries.filter((data) =>
+        data[1].url.toLowerCase().includes(filter),
+      );
+    }
 
     renderList(filteredSeries);
   }
