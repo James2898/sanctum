@@ -7,6 +7,7 @@
   "permissions": ["identity", "storage"],
   "host_permissions": [
     "https://*.asurascans.com/*",
+    "https://*.asuracomic.net/*",
     "https://*.mangahere.cc/*",
     "https://*.mangadex.org/*",
     "https://www.googleapis.com/*",
@@ -24,6 +25,7 @@
     {
       "matches": [
         "https://*.asurascans.com/*",
+        "https://*.asuracomic.net/*",
         "https://*.mangahere.cc/*",
         "https://*.mangadex.org/*",
         "https://mangaplus.shueisha.co.jp/*",

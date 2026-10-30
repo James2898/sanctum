@@ -103,6 +103,17 @@
         display: flex;
         align-items: center;
         justify-content: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      #filter-container label {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        font-size: 12px;
+        cursor: pointer;
+        user-select: none;
       }
 
       .series-list {
@@ -148,6 +159,7 @@
         width: 150px;
         border-radius: 8px;
         border: 2px solid #7d42ff;
+        display: block;
       }
       .btn-read {
         color: white;
@@ -179,7 +191,7 @@
         font-size: 11px;
         cursor: pointer;
         padding: 0;
-        transition: transform 0.2;
+        transition: transform 0.2s;
       }
       .btn-delete img:hover {
         transform: scale(1.2);
@@ -225,16 +237,11 @@
       </button>
     </div>
     <div id="filter-container">
-      <input type="radio" value="all" name="filter" checked />
-      <p>All</p>
-      <input type="radio" value="asura" name="filter" />
-      <p>Asura</p>
-      <input type="radio" value="mangahere" name="filter" />
-      <p>Mangahere</p>
-      <input type="radio" value="mangadex" name="filter" />
-      <p>Mangadex</p>
-      <input type="radio" value="mangaplus" name="filter" />
-      <p>Mangaplus</p>
+      <label><input type="radio" value="all" name="filter" checked />All</label>
+      <label><input type="radio" value="asura" name="filter" />Asura</label>
+      <label><input type="radio" value="mangahere" name="filter" />Mangahere</label>
+      <label><input type="radio" value="mangadex" name="filter" />Mangadex</label>
+      <label><input type="radio" value="mangaplus" name="filter" />Mangaplus</label>
     </div>
     <div id="loading">
       <img src="refresh.svg" class="spinning" />
@@ -244,10 +251,7 @@
     <div class="status" id="status">Syncing with Google Drive...</div>
 
     <div id="manga-preview">
-      <img
-        id="preview-img"
-        src="https://mangadex.org/covers/a77742b1-befd-49a4-bff5-1ad4e6b0ef7b/d34fa144-0e6c-4f1a-8bd4-90e91eb5b3cf.jpg"
-      />
+      <img id="preview-img" alt="Cover Preview" />
     </div>
     <script src="popup.js"></script>
   </body>
