@@ -49,6 +49,7 @@
 
 ```text
 sanctum-extension/
+├── icons/           # Extension icon assets (SVG master and PNGs)
 ├── manifest.json    # Extension configuration and permissions
 ├── background.js    # The "Sync Engine" - Handles OAuth and Drive API
 ├── content.js       # The "Scraper" - Site-specific logic and reading timers
