@@ -20,10 +20,21 @@
       #header {
         display: flex;
         align-items: center;
-        border-bottom: 1px #333;
+        border-bottom: 1px solid #333;
         justify-content: space-between;
 
         margin-top: 0;
+      }
+
+      .header-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .header-icon {
+        width: 24px;
+        height: 24px;
       }
 
       #refresh-btn {
@@ -225,7 +236,14 @@
   </head>
   <body>
     <div id="header">
-      <h2>Sanctum Vault</h2>
+      <div class="header-title">
+        <img
+          src="icons/icon.svg"
+          alt="Sanctum Vault Icon"
+          class="header-icon"
+        />
+        <h2>Sanctum Vault</h2>
+      </div>
       <button id="refresh-btn">
         <img src="refresh.svg" />
       </button>
@@ -239,9 +257,15 @@
     <div id="filter-container">
       <label><input type="radio" value="all" name="filter" checked />All</label>
       <label><input type="radio" value="asura" name="filter" />Asura</label>
-      <label><input type="radio" value="mangahere" name="filter" />Mangahere</label>
-      <label><input type="radio" value="mangadex" name="filter" />Mangadex</label>
-      <label><input type="radio" value="mangaplus" name="filter" />Mangaplus</label>
+      <label
+        ><input type="radio" value="mangahere" name="filter" />Mangahere</label
+      >
+      <label
+        ><input type="radio" value="mangadex" name="filter" />Mangadex</label
+      >
+      <label
+        ><input type="radio" value="mangaplus" name="filter" />Mangaplus</label
+      >
     </div>
     <div id="loading">
       <img src="refresh.svg" class="spinning" />
