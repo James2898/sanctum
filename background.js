@@ -1,14 +1,23 @@
 const HISTORY_FILE = "sanctum_history.json";
 
+let syncQueue = Promise.resolve();
+
+function enqueueOperation(operation) {
+  const next = syncQueue.then(operation, operation);
+  syncQueue = next.catch(() => {});
+  return next;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "SYNC_CHAPTER") {
-    (async () => {
+    enqueueOperation(async () => {
       try {
         chrome.action.setBadgeText({ text: "..." });
         const tokenObj = await chrome.identity.getAuthToken({
           interactive: true,
         });
-        const token = tokenObj.token;
+        const token = tokenObj?.token;
+        if (!token) throw new Error("No auth token received");
 
         let fileId = await findFile(token);
         if (!fileId) fileId = await createFile(token);
@@ -24,7 +33,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         let data = { series: {} };
         if (response.ok) {
           const text = await response.text();
-          if (text.trim()) data = JSON.parse(text);
+          if (text.trim()) {
+            try {
+              const parsed = JSON.parse(text);
+              if (parsed && typeof parsed === "object") {
+                data = parsed;
+              }
+            } catch (parseErr) {
+              console.warn(
+                "[Sanctum] Existing file JSON malformed, resetting:",
+                parseErr,
+              );
+            }
+          }
+        } else if (response.status !== 404) {
+          throw new Error(`Drive fetch failed with status ${response.status}`);
+        }
+
+        if (!data.series || typeof data.series !== "object") {
+          data.series = {};
         }
 
         // Update entry
@@ -35,7 +62,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         };
 
         // Upload back to Drive
-        await fetch(
+        const patchRes = await fetch(
           `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
           {
             method: "PATCH",
@@ -43,6 +70,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             body: JSON.stringify(data),
           },
         );
+
+        if (!patchRes.ok) {
+          throw new Error(`Drive patch failed with status ${patchRes.status}`);
+        }
 
         console.log("✅ [Sanctum] Vault Updated:", message.payload.manga);
         chrome.action.setBadgeText({ text: "OK" });
@@ -53,18 +84,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chrome.action.setBadgeText({ text: "ERR" });
         chrome.action.setBadgeBackgroundColor({ color: "#c0392b" });
       }
-    })();
+    });
     return true;
   }
 
-  // Add this inside your chrome.runtime.onMessage.addListener block
   if (message.type === "DELETE_SERIES") {
-    (async () => {
+    enqueueOperation(async () => {
       try {
         const tokenObj = await chrome.identity.getAuthToken({
           interactive: true,
         });
-        const token = tokenObj.token;
+        const token = tokenObj?.token;
+        if (!token) throw new Error("No auth token received");
+
         const fileId = await findFile(token);
 
         if (fileId) {
@@ -74,12 +106,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               headers: { Authorization: `Bearer ${token}` },
             },
           );
+
+          if (!response.ok) {
+            throw new Error(`Drive fetch failed with status ${response.status}`);
+          }
+
           let data = await response.json();
+          if (data && data.series && typeof data.series === "object") {
+            delete data.series[message.payload.manga];
+          }
 
-          // Remove the specific series
-          delete data.series[message.payload.manga];
-
-          await fetch(
+          const patchRes = await fetch(
             `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
             {
               method: "PATCH",
@@ -88,13 +125,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             },
           );
 
-          sendResponse({ status: "success" });
+          if (!patchRes.ok) {
+            throw new Error(`Drive patch failed with status ${patchRes.status}`);
+          }
         }
+        sendResponse({ status: "success" });
       } catch (err) {
         console.error("[Sanctum] Delete Failed:", err);
         sendResponse({ status: "error" });
       }
-    })();
+    });
     return true; // Keep channel open for sendResponse
   }
 });
@@ -106,6 +146,7 @@ async function findFile(token) {
       headers: { Authorization: `Bearer ${token}` },
     },
   );
+  if (!res.ok) return null;
   const { files } = await res.json();
   return files && files.length > 0 ? files[0].id : null;
 }
@@ -120,6 +161,7 @@ async function createFile(token) {
     },
     body: JSON.stringify(metadata),
   });
+  if (!res.ok) throw new Error(`Drive create failed with status ${res.status}`);
   const file = await res.json();
   return file.id;
 }

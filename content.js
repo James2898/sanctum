@@ -1,11 +1,14 @@
+const asuraConfig = {
+  regex: /(?:comics|series)\/([^\/]+)\/chapter\/(\d+)/,
+  titleIndex: 1,
+  chapterIndex: 2,
+  getTitle: (match) =>
+    match[1].replace(/-[a-z0-9]{8}$/, "").replace(/-/g, " "),
+};
+
 const SITE_CONFIGS = {
-  "asurascans.com": {
-    regex: /comics\/([^\/]+)\/chapter\/(\d+)/,
-    titleIndex: 1,
-    chapterIndex: 2,
-    getTitle: (match) =>
-      match[1].replace(/-[a-z0-9]{8}$/, "").replace(/-/g, " "),
-  },
+  "asurascans.com": asuraConfig,
+  "asuracomic.net": asuraConfig,
   "mangahere.cc": {
     regex: /manga\/([^\/]+)\/c([\d\.]+)/,
     titleIndex: 1,
@@ -62,8 +65,12 @@ const SITE_CONFIGS = {
   },
 };
 
-const domain = window.location.hostname.replace("www.", "");
-const config = SITE_CONFIGS[domain];
+const hostname = window.location.hostname.toLowerCase();
+const domain = Object.keys(SITE_CONFIGS).find(
+  (configuredDomain) =>
+    hostname === configuredDomain || hostname.endsWith("." + configuredDomain),
+);
+const config = domain ? SITE_CONFIGS[domain] : undefined;
 
 if (config) {
   const checkPage = (retries = 0) => {

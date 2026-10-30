@@ -6,126 +6,21 @@ const searchInput = document.getElementById("search-field");
 const mangaPreview = document.getElementById("manga-preview");
 const previewImage = document.getElementById("preview-img");
 const filterContainer = document.getElementById("filter-container");
-const IS_DEV_MODE = false;
 
 let allSeries = [];
-const mockData = {
-  series: {
-    "childhood friend of the zenith": {
-      chapter: "93",
-      url: "https://asurascans.com/series/childhood-friend-of-the-zenith-a137c072/chapter/93",
-      cover:
-        "https://gg.asurascans.com/storage/media/292/conversions/01J6AR9XJKAQHET3AJYG9YPZ57-optimized.webp",
-      updated: "2026-02-15T09:18:35.046Z",
-    },
-    "dead tube": {
-      chapter: "112",
-      url: "https://www.mangahere.cc/manga/dead_tube/c112/1.html#ipg38",
-      updated: "2026-02-16T10:29:53.599Z",
-    },
-    "gachi akuta": {
-      chapter: "162.5",
-      url: "https://www.mangahere.cc/manga/gachi_akuta/c162.5/15.html",
-      updated: "2026-02-11T23:52:44.307Z",
-    },
-    haikyu: {
-      chapter: "402",
-      url: "https://www.mangahere.cc/manga/haikyu/c402/1.html",
-      updated: "2026-02-05T04:04:56.705Z",
-    },
-    "Hochiya-san wa Amariaru": {
-      chapter: "1",
-      url: "https://mangadex.org/chapter/06b6fdbd-2e3b-4fd1-af43-24509d2d7e28/9",
-      updated: "2026-02-12T08:33:57.600Z",
-    },
-    "Ichi the Witch": {
-      chapter: 70,
-      url: "https://mangaplus.shueisha.co.jp/viewer/1028143",
-      updated: "2026-02-16T01:41:01.756Z",
-    },
-    "Mousou Sensei": {
-      chapter: "5",
-      url: "https://mangadex.org/chapter/795e85f5-754e-4c05-ae7d-b21480aab7e8",
-      updated: "2026-02-16T09:49:09.743Z",
-    },
-    "ogami tsumiki to kinichijou": {
-      chapter: "067",
-      url: "https://www.mangahere.cc/manga/ogami_tsumiki_to_kinichijou/c067/1.html",
-      updated: "2026-02-15T09:23:23.142Z",
-    },
-    "Ookii Muki Muki Chiisai Muchi Muchi": {
-      chapter: "32",
-      url: "https://mangadex.org/chapter/fd0a8958-479d-41e7-a8ff-28562c55aca6/14",
-      cover:
-        "https://mangadex.org/covers/eac2e293-e6ff-46f9-af78-bd6bba824ad1/121e7723-92c4-4b84-89bd-fb31b2152f96.jpg",
-      updated: "2026-02-10T23:47:35.711Z",
-    },
-    "raising villains the right way": {
-      chapter: "226",
-      url: "https://asurascans.com/series/raising-villains-the-right-way-d53bec38/chapter/222",
-      updated: "2026-02-15T09:23:52.790Z",
-    },
-    "shangri la frontier": {
-      chapter: "254",
-      url: "https://www.mangahere.cc/manga/shangri_la_frontier/c254/1.html#ipg18",
-      updated: "2026-02-10T02:27:27.223Z",
-    },
-    "Shibou Yuugi de Meshi wo Kuu.": {
-      chapter: "4",
-      url: "https://mangadex.org/chapter/e171ce23-9b11-444a-9d99-a800d718c3d3/32",
-      updated: "2026-02-12T08:38:32.891Z",
-    },
-    "survival story of a sword king in a fantasy world": {
-      chapter: "059",
-      url: "https://www.mangahere.cc/manga/survival_story_of_a_sword_king_in_a_fantasy_world/c059/1.html#ipg2",
-      updated: "2026-02-13T22:44:26.856Z",
-    },
-    "the knight king who returned with a god": {
-      chapter: "150",
-      url: "https://asurascans.com/series/the-knight-king-who-returned-with-a-god-059bea61/chapter/150",
-      updated: "2026-02-11T23:49:01.206Z",
-    },
-    "the max level hero has returned": {
-      chapter: "226",
-      url: "https://asurascans.com/series/the-max-level-hero-has-returned-16db2f56/chapter/226",
-      updated: "2026-02-05T03:37:40.159Z",
-    },
-    "the ultimate shut in": {
-      chapter: "7",
-      url: "https://asurascans.com/series/the-ultimate-shut-in-1c94d41f/chapter/7",
-      updated: "2026-02-05T03:37:17.512Z",
-    },
-    "Toru ni Taranai": {
-      chapter: "4",
-      url: "https://mangadex.org/chapter/a8d82fdf-2c46-4cb6-ad51-1573ef61705d/21",
-      updated: "2026-02-13T22:43:37.868Z",
-    },
-    "Tsuihou Sareru Tabi ni Skill o Te ni Ireta Ore ga, 100 no Isekai de 2-shuume Musou":
-      {
-        chapter: "27.4",
-        url: "https://mangadex.org/chapter/7072ea33-02fb-4c7e-a3a4-fda97ed7b833/9",
-        updated: "2026-02-07T23:29:10.787Z",
-      },
-    "tsuki ga michibiku isekai douchuu": {
-      chapter: "114",
-      url: "https://www.mangahere.cc/manga/tsuki_ga_michibiku_isekai_douchuu/c114/1.html#ipg28",
-      updated: "2026-02-09T05:11:17.759Z",
-    },
-    "Ueno-kun wa Kaihatsuzumi": {
-      chapter: "66",
-      url: "https://mangadex.org/chapter/e1951c73-f118-47f0-b2dc-2cf58c0de609/18",
-      updated: "2026-02-16T19:17:53.351Z",
-    },
-  },
-};
+
+previewImage.addEventListener("error", () => {
+  mangaPreview.style.display = "none";
+});
 
 const renderList = (series) => {
+  listElement.innerHTML = "";
+
   if (series.length === 0) {
     listElement.innerHTML =
       "<div class='status'>Vault is empty. Start reading!</div>";
+    return;
   }
-
-  listElement.innerHTML = "";
 
   series.forEach(([name, info]) => {
     const card = document.createElement("div");
@@ -143,61 +38,100 @@ const renderList = (series) => {
       : "Date Unknown";
 
     // 2. Site Logic
-    var siteTag = "???";
-    var tagColor = "#27ae60";
+    let siteTag = "???";
+    let tagColor = "#27ae60";
     if (info.url) {
-      if (info.url.includes("mangadex")) {
+      const lowerUrl = info.url.toLowerCase();
+      if (lowerUrl.includes("mangadex")) {
         siteTag = "Mangadex";
         tagColor = "#ff6740";
-      }
-      if (info.url.includes("asurascans")) {
+      } else if (lowerUrl.includes("asura")) {
         siteTag = "AsuraScans";
         tagColor = "#7d42ff";
-      }
-      if (info.url.includes("mangahere")) {
+      } else if (lowerUrl.includes("mangahere")) {
         siteTag = "Mangahere";
         tagColor = "rgb(231, 49, 255)";
-      }
-      if (info.url.includes("mangaplus")) {
+      } else if (lowerUrl.includes("mangaplus")) {
         siteTag = "MangaPlus";
-        tagColor = "rgb(0, 0, 0)";
-      }
-      if (info.url.includes("kunmanga")) {
+        tagColor = "#efefef";
+      } else if (lowerUrl.includes("kunmanga")) {
         siteTag = "KunManga";
         tagColor = "rgb(1, 255, 183)";
       }
     }
 
-    card.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:start; margin-bottom: 4px;">
-      <span class="manga-title" style="flex: 1; padding-right: 10px;">${name}</span>
-      <span style="font-size: 10px; color: #777; white-space: nowrap;">${lastUpdated}</span>
-    </div>
-    
-    <div class="manga-info" style="display: flex; align-items: center; justify-content: space-between;">
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <span style="font-size:12px; padding:1px 4px; background:none; color:${tagColor}; font-weight: bold;">${siteTag}</span>
-        <span style="font-size: 13px;">Chapter ${info.chapter}</span>
-      </div>
-      
-      <div class="manga-actions">
-        <a href="${info.url}" target="_blank" class="btn-read">
-          <img src="arrow-right.svg" />
-        </a>
-        <button class="btn-delete" data-manga="${name}">
-          <img src="trash.svg" /> 
-        </button>
-      </div>
-    </div>
-  `;
+    // Build header row safely
+    const headerRow = document.createElement("div");
+    headerRow.style.cssText =
+      "display:flex; justify-content:space-between; align-items:start; margin-bottom: 4px;";
+
+    const titleEl = document.createElement("span");
+    titleEl.className = "manga-title";
+    titleEl.style.cssText = "flex: 1; padding-right: 10px;";
+    titleEl.textContent = name;
+
+    const dateEl = document.createElement("span");
+    dateEl.style.cssText = "font-size: 10px; color: #777; white-space: nowrap;";
+    dateEl.textContent = lastUpdated;
+
+    headerRow.appendChild(titleEl);
+    headerRow.appendChild(dateEl);
+
+    // Build info row safely
+    const infoRow = document.createElement("div");
+    infoRow.className = "manga-info";
+    infoRow.style.cssText =
+      "display: flex; align-items: center; justify-content: space-between;";
+
+    const tagGroup = document.createElement("div");
+    tagGroup.style.cssText = "display: flex; align-items: center; gap: 6px;";
+
+    const tagSpan = document.createElement("span");
+    tagSpan.style.cssText = `font-size:12px; padding:1px 4px; background:none; color:${tagColor}; font-weight: bold;`;
+    tagSpan.textContent = siteTag;
+
+    const chapterSpan = document.createElement("span");
+    chapterSpan.style.cssText = "font-size: 13px;";
+    chapterSpan.textContent = `Chapter ${info.chapter ?? ""}`;
+
+    tagGroup.appendChild(tagSpan);
+    tagGroup.appendChild(chapterSpan);
+
+    const actionsDiv = document.createElement("div");
+    actionsDiv.className = "manga-actions";
+
+    const readLink = document.createElement("a");
+    readLink.className = "btn-read";
+    readLink.target = "_blank";
+    readLink.rel = "noopener noreferrer";
+    readLink.href = info.url || "#";
+    const readImg = document.createElement("img");
+    readImg.src = "arrow-right.svg";
+    readImg.alt = "Continue reading";
+    readLink.appendChild(readImg);
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "btn-delete";
+    deleteBtn.setAttribute("data-manga", name);
+    const deleteImg = document.createElement("img");
+    deleteImg.src = "trash.svg";
+    deleteImg.alt = "Delete series";
+    deleteBtn.appendChild(deleteImg);
+
+    actionsDiv.appendChild(readLink);
+    actionsDiv.appendChild(deleteBtn);
+
+    infoRow.appendChild(tagGroup);
+    infoRow.appendChild(actionsDiv);
+
+    card.appendChild(headerRow);
+    card.appendChild(infoRow);
 
     // Art Cover Preview Function
-    const titleEl = card.querySelector(".manga-title");
     if (info.cover) {
-      // Todo: Fix Performance Issue on 100+ logs
-      titleEl.addEventListener("mouseenter", (e) => {
-        mangaPreview.style.display = "block";
+      titleEl.addEventListener("mouseenter", () => {
         previewImage.src = info.cover;
+        mangaPreview.style.display = "block";
       });
 
       titleEl.addEventListener("mousemove", (e) => {
@@ -208,13 +142,14 @@ const renderList = (series) => {
 
       titleEl.addEventListener("mouseleave", () => {
         mangaPreview.style.display = "none";
+        previewImage.src = "";
       });
     } else {
       titleEl.classList.add("no-cover");
     }
 
     // Delete Function
-    card.querySelector(".btn-delete").addEventListener("click", function () {
+    deleteBtn.addEventListener("click", function () {
       const mangaName = this.getAttribute("data-manga");
       if (confirm(`Delete ${mangaName} from your history?`)) {
         this.innerText = "Deleting...";
@@ -224,8 +159,13 @@ const renderList = (series) => {
             payload: { manga: mangaName },
           },
           (response) => {
-            if (response.status === "success") {
+            if (response && response.status === "success") {
+              allSeries = allSeries.filter(([n]) => n !== mangaName);
               card.remove();
+              if (allSeries.length === 0) {
+                listElement.innerHTML =
+                  "<div class='status'>Vault is empty. Start reading!</div>";
+              }
             } else {
               this.innerText = "Error";
             }
@@ -238,23 +178,32 @@ const renderList = (series) => {
   });
 };
 
-const loadVault = async () => {
-  if (IS_DEV_MODE) {
-    console.log("🛠️ Sanctum: Using Mock Data");
+const applyFilters = () => {
+  const searchText = searchInput.value.trim().toLowerCase();
+  const selectedFilter =
+    document.querySelector('input[name="filter"]:checked')?.value || "all";
 
-    // Process exactly like real API data
-    allSeries = Object.entries(mockData.series).sort((a, b) =>
-      a[0].localeCompare(b[0]),
+  let filtered = allSeries;
+  if (selectedFilter !== "all") {
+    filtered = filtered.filter(([, data]) =>
+      data.url && data.url.toLowerCase().includes(selectedFilter),
     );
-
-    renderList(allSeries);
-    loadingElement.style.display = "none";
-    return; // Skip the actual fetch
   }
+  if (searchText) {
+    filtered = filtered.filter(([name]) =>
+      name.toLowerCase().includes(searchText),
+    );
+  }
+  renderList(filtered);
+};
 
+const loadVault = async () => {
   try {
     // 1. Get the token
     const tokenObj = await chrome.identity.getAuthToken({ interactive: true });
+    if (!tokenObj || !tokenObj.token) {
+      throw new Error("Failed to get authentication token");
+    }
 
     // 2. Find the file
     const searchRes = await fetch(
@@ -263,10 +212,15 @@ const loadVault = async () => {
         headers: { Authorization: `Bearer ${tokenObj.token}` },
       },
     );
+    if (!searchRes.ok) {
+      throw new Error(`Drive search failed: ${searchRes.status}`);
+    }
     const { files } = await searchRes.json();
 
     if (!files || files.length === 0) {
-      loadingElement.innerText = "No history found in Vault.";
+      loadingElement.style.display = "none";
+      listElement.innerHTML =
+        "<div class='status'>Vault is empty. Start reading!</div>";
       return;
     }
 
@@ -277,15 +231,20 @@ const loadVault = async () => {
         headers: { Authorization: `Bearer ${tokenObj.token}` },
       },
     );
+    if (!contentRes.ok) {
+      throw new Error(`Drive fetch failed: ${contentRes.status}`);
+    }
     const data = await contentRes.json();
 
     // 4. Render the Dashboard
     loadingElement.style.display = "none";
-    allSeries = Object.entries(data.series).sort((a, b) =>
+    const seriesData =
+      data && data.series && typeof data.series === "object" ? data.series : {};
+    allSeries = Object.entries(seriesData).sort((a, b) =>
       a[0].localeCompare(b[0]),
     );
 
-    renderList(allSeries);
+    applyFilters();
 
     statusElement.innerText = `Last updated: ${new Date().toLocaleTimeString()}`;
   } catch (err) {
@@ -295,29 +254,11 @@ const loadVault = async () => {
   }
 };
 
-// Search Field
-searchInput.addEventListener("input", (e) => {
-  const searchText = e.target.value.toLowerCase();
-  const filteredSeries = allSeries.filter(([name]) =>
-    name.toLowerCase().includes(searchText),
-  );
-
-  renderList(filteredSeries);
-});
-
-// Filter By Mangasites
+// Search Field & Filter By Mangasites
+searchInput.addEventListener("input", applyFilters);
 filterContainer.addEventListener("change", (e) => {
   if (e.target.name === "filter") {
-    const filter = e.target.value;
-
-    let filteredSeries = allSeries;
-    if (filter !== "all") {
-      filteredSeries = allSeries.filter((data) =>
-        data[1].url.toLowerCase().includes(filter),
-      );
-    }
-
-    renderList(filteredSeries);
+    applyFilters();
   }
 });
 
@@ -327,7 +268,10 @@ refreshBtn.addEventListener("click", () => {
   listElement.innerHTML = "";
   listElement.scrollTop = 0;
   loadingElement.style.display = "block";
+  loadingElement.innerHTML = `<img src="refresh.svg" class="spinning" /><p>Fetching your records...</p>`;
   searchInput.value = "";
+  const allRadio = document.querySelector('input[name="filter"][value="all"]');
+  if (allRadio) allRadio.checked = true;
 
   loadVault().finally(() => {
     setTimeout(() => {
