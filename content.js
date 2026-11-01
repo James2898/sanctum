@@ -1,5 +1,5 @@
 const asuraConfig = {
-  regex: /(?:comics|series)\/([^\/]+)\/chapter\/(\d+)/,
+  regex: /(?:comics|series)\/([^\/]+)\/chapter\/([\d\.\-]+)/,
   titleIndex: 1,
   chapterIndex: 2,
   getTitle: (match) =>
@@ -25,9 +25,9 @@ const SITE_CONFIGS = {
       const chapterEl = document.querySelector("div.reader--meta.chapter");
       if (chapterEl) {
         const match = chapterEl.innerText.match(/(\d+(\.\d+)?)/);
-        return match && match[0] ? match[0] : "Reading";
+        return match && match[0] ? match[0] : null;
       }
-      return "Reading";
+      return null;
     },
   },
   "mangaplus.shueisha.co.jp": {
@@ -47,10 +47,10 @@ const SITE_CONFIGS = {
       );
       if (chapterEl) {
         // Extracts the number from strings like "#070"
-        const match = chapterEl.innerText.match(/(\d+)/);
-        return match ? parseInt(match[0], 10) : "Reading";
+        const match = chapterEl.innerText.match(/(\d+(\.\d+)?)/);
+        return match && match[0] ? match[0] : null;
       }
-      return "Reading";
+      return null;
     },
   },
   "kunmanga.com": {
@@ -60,7 +60,7 @@ const SITE_CONFIGS = {
     getTitle: (match) => match[1].replace(/-/g, " "),
     getChapter: (match) => {
       const numMatch = match[2].match(/[\d\.]+/);
-      return numMatch && numMatch[0] ? numMatch[0] : "Reading";
+      return numMatch && numMatch[0] ? numMatch[0] : null;
     },
   },
 };
@@ -85,14 +85,21 @@ if (config) {
         ? config.getChapter(match)
         : match[config.chapterIndex];
 
-      // Retry logic if title isn't loaded yet (common in SPAs like MangaPlus/MangaDex)
-      if (!mangaTitle && retries < 8) {
-        console.log(`[Sanctum] Waiting for title... retry ${retries + 1}/8`);
+      // Retry logic if title or chapter isn't loaded yet (common in SPAs like MangaPlus/MangaDex)
+      if ((!mangaTitle || !chapterNumber) && retries < 8) {
+        console.log(
+          `[Sanctum] Waiting for title/chapter... retry ${retries + 1}/8`,
+        );
         setTimeout(() => checkPage(retries + 1), 1000);
         return;
       }
 
-      if (mangaTitle && chapterNumber) {
+      if (
+        mangaTitle &&
+        chapterNumber &&
+        chapterNumber !== "Reading" &&
+        chapterNumber !== "Chapter Reading"
+      ) {
         console.log(
           `%c[Sanctum] Spotted: ${mangaTitle} | Ch. ${chapterNumber}`,
           "color: #7d42ff; font-weight: bold;",

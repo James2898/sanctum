@@ -2,6 +2,19 @@
 
 All notable changes to the Sanctum Chrome extension will be documented in this file.
 
+## [Unreleased] — 2026-11-01
+
+### Fixed
+- Hardened Google Drive sync flow and fixed SPA chapter extraction (`TASK-20261101-dbo`)
+  - Refactored `findFile(token)` in `background.js` to return structured tri-state status objects (`found`, `not_found`, `error`), preventing duplicate file creation on network or API failures.
+  - Restricted `createFile()` invocation strictly to `{ status: "not_found" }` outcomes.
+  - Configured quiet non-interactive background authentication (`interactive: false`) for `getAuthToken`, preventing focus stealing during sync.
+  - Added visual error action badge (`"!"` with background `#c0392b`) on Drive API and authentication failures.
+  - Eliminated premature `"Reading"` / `"Chapter Reading"` fallback dispatches on MangaDex and MangaPlus, retrying up to 8 times for title and chapter availability.
+  - Extended Asura chapter regex and parsers to preserve decimal and fractional chapter numbers (e.g., `150.5`, `12-1`).
+  - Updated `DELETE_SERIES` handler to inspect structured `findFile` status objects.
+  - Affected files: `background.js`, `content.js`
+
 ## [Unreleased] — 2026-10-31
 
 ### Added
