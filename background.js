@@ -13,14 +13,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     enqueueOperation(async () => {
       try {
         chrome.action.setBadgeText({ text: "..." });
-        const tokenObj = await chrome.identity.getAuthToken({
-          interactive: true,
-        });
+        let tokenObj;
+        try {
+          tokenObj = await chrome.identity.getAuthToken({
+            interactive: false,
+          });
+        } catch (authErr) {
+          throw new Error(
+            chrome.runtime.lastError?.message ||
+              authErr?.message ||
+              "Background auth token retrieval failed",
+          );
+        }
+        if (chrome.runtime.lastError) {
+          throw new Error(chrome.runtime.lastError.message);
+        }
         const token = tokenObj?.token;
         if (!token) throw new Error("No auth token received");
 
-        let fileId = await findFile(token);
-        if (!fileId) fileId = await createFile(token);
+        const lookup = await findFile(token);
+        if (lookup.status === "error") {
+          throw new Error(`Drive file lookup failed: ${lookup.error}`);
+        }
+
+        let fileId;
+        if (lookup.status === "not_found") {
+          fileId = await createFile(token);
+        } else if (lookup.status === "found") {
+          fileId = lookup.fileId;
+        } else {
+          throw new Error(`Unexpected lookup status: ${lookup.status}`);
+        }
 
         // Fetch and parse content safely
         const response = await fetch(
@@ -81,7 +104,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         setTimeout(() => chrome.action.setBadgeText({ text: "" }), 3000);
       } catch (err) {
         console.error("❌ [Sanctum] Sync Failed:", err.message);
-        chrome.action.setBadgeText({ text: "ERR" });
+        chrome.action.setBadgeText({ text: "!" });
         chrome.action.setBadgeBackgroundColor({ color: "#c0392b" });
       }
     });
@@ -92,14 +115,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     enqueueOperation(async () => {
       try {
         const tokenObj = await chrome.identity.getAuthToken({
-          interactive: true,
+          interactive: false,
         });
+        if (chrome.runtime.lastError) {
+          throw new Error(chrome.runtime.lastError.message);
+        }
         const token = tokenObj?.token;
         if (!token) throw new Error("No auth token received");
 
-        const fileId = await findFile(token);
+        const lookup = await findFile(token);
+        if (lookup.status === "error") {
+          throw new Error(`Drive file lookup failed: ${lookup.error}`);
+        }
 
-        if (fileId) {
+        if (lookup.status === "found" && lookup.fileId) {
+          const fileId = lookup.fileId;
           const response = await fetch(
             `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
             {
@@ -132,6 +162,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ status: "success" });
       } catch (err) {
         console.error("[Sanctum] Delete Failed:", err);
+        chrome.action.setBadgeText({ text: "!" });
+        chrome.action.setBadgeBackgroundColor({ color: "#c0392b" });
         sendResponse({ status: "error" });
       }
     });
@@ -140,15 +172,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function findFile(token) {
-  const res = await fetch(
-    `https://www.googleapis.com/drive/v3/files?q=name='${HISTORY_FILE}' and trashed=false`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-    },
-  );
-  if (!res.ok) return null;
-  const { files } = await res.json();
-  return files && files.length > 0 ? files[0].id : null;
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=name='${HISTORY_FILE}' and trashed=false`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    if (!res.ok) {
+      return { status: "error", error: `HTTP ${res.status}` };
+    }
+    const { files } = await res.json();
+    if (files && files.length > 0) {
+      return { status: "found", fileId: files[0].id };
+    }
+    return { status: "not_found" };
+  } catch (err) {
+    return { status: "error", error: err.message || String(err) };
+  }
 }
 
 async function createFile(token) {
