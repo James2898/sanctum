@@ -12,7 +12,7 @@
 ### Context & Background
 I am working on elevating **Sanctum** from a personal utility into an industry-grade Chrome Extension (Manifest V3) before finalizing its featured case study in my portfolio (`portfolio/src/content/projects/sanctum.md`).
 
-An architectural audit of this repository (`/home/james2898/projects/sanctum`) identified four critical areas to address:
+An architectural audit of this repository (`sanctum`) identified four critical areas to address:
 
 1. **Local-First Storage & Offline Availability:**
    - Currently, `popup.js` fetches `sanctum_history.json` directly from the Google Drive REST API on every open, introducing 1–2s network latency and failing offline.

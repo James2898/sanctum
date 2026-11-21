@@ -2,10 +2,23 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const PORT = 3456;
 const HOST = "0.0.0.0";
 const ROOT_DIR = path.resolve(__dirname, "../..");
+
+function getLanIP() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return "localhost";
+}
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -74,8 +87,9 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, HOST, () => {
+  const lanIP = getLanIP();
   console.log(`[Sanctum Preview] Server running on http://${HOST}:${PORT}`);
-  console.log(`[Sanctum Preview] Access locally on your network at http://192.168.1.55:${PORT}`);
+  console.log(`[Sanctum Preview] Access locally on your network at http://${lanIP}:${PORT}`);
 });
 
 process.on("SIGTERM", () => {
