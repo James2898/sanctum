@@ -2,6 +2,24 @@
 
 All notable changes to the Sanctum Chrome extension will be documented in this file.
 
+## [Unreleased] — 2026-11-22
+
+### Added
+- Implement Phase 2 local-first storage, offline mutation queue, and SPA navigation (`TASK-20261122-v5d`)
+  - Added `chrome.storage.local` caching (`series`, `fileId`, `lastSync`, `pending_sync`) and stale `fileId` `404` recovery in `background.js`, keeping `lastSync` updated strictly on successful Google Drive syncs.
+  - Added immediate cache-first popup rendering in `popup.js` with non-blocking background `SYNC_VAULT` refresh, interactive onboarding on empty cache and manual refresh, `isSafeUrl` `http`/`https` sanitization, and cache preservation when offline or on Drive errors.
+  - Added FIFO `pending_sync` offline/error mutation queuing (`SYNC_CHAPTER`, `DELETE_SERIES`) covering `navigator.onLine === false`, auth errors, Drive network errors, and non-2xx HTTP errors, with sequential reconciliation via `enqueueOperation()`, failure retention, snapshot-prefix re-entrancy safety, and `online` event reconciliation in `background.js`.
+  - Added monotonic chapter progress guard (`parseChapter`, `compareChapterParts`, `shouldUpdateProgress`) supporting integer, decimal, and hyphenated fractional chapters with timestamp fallback for non-numeric identifiers, non-error downgrade rejection, and prototype-pollution guards (`isValidMangaName`, `Object.hasOwn`).
+  - Added `window.navigation` (`navigatesuccess`, `currententrychange`) with `popstate`/`hashchange` fallbacks, `{ passive: true }` scroll listeners, >25% scroll-depth gating (`getScrollDepth`, `isScrollDepthSatisfied`), 15-second dwell/debounce gating, single-dispatch per URL, and dispatch-time metadata re-extraction in `content.js`.
+  - Expanded zero-dependency `node:test` coverage across `test/background.test.js`, `test/content.test.js`, and `test/popup.test.js` (57 passing tests) and added `chrome.storage.local` + `SYNC_VAULT` stubs in `test/preview/mock-chrome.js`.
+  - Affected files: `background.js`, `content.js`, `popup.js`, `test/background.test.js`, `test/content.test.js`, `test/popup.test.js`, `test/preview/mock-chrome.js`
+
+### Changed
+- Replace full-document `MutationObserver` and 3-second debounce with targeted SPA navigation and 15-second dwell + scroll-depth gating (`TASK-20261122-v5d`)
+  - Removed the `{ subtree: true, childList: true }` `MutationObserver` on `document` in `content.js`, resetting timers and per-route scroll/dispatch state on SPA URL transitions via `handleRouteChange()`.
+  - Consolidated Drive read/validation (`fetchAndValidateDriveVault`) and write (`uploadDriveVault`) helpers with BUG-001 malformed-JSON aborts, added `clearBadge()` hygiene across `SYNC_CHAPTER`/`DELETE_SERIES`/`SYNC_VAULT`, and aligned `DELETE_SERIES` `{ status: "queued" }` handling in `popup.js`.
+  - Affected files: `background.js`, `content.js`, `popup.js`
+
 ## [Unreleased] — 2026-11-21
 
 ### Fixed
