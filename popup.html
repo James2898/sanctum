@@ -2,14 +2,19 @@
 <html>
   <head>
     <style>
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        width: 350px;
+        width: 380px;
         background: #0f0f0f;
         color: #efefef;
         font-family: "Segoe UI", sans-serif;
         margin: 0;
         padding: 15px;
         min-height: 35rem;
+        overflow-x: hidden;
       }
 
       h2 {
@@ -116,6 +121,7 @@
         justify-content: center;
         gap: 8px;
         margin-bottom: 10px;
+        flex-wrap: wrap;
       }
 
       #filter-container label {
