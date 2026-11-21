@@ -10,9 +10,11 @@ const {
   setSuccessBadge,
   setInFlightBadge,
   clearBadgeTimer,
+  clearBadge,
   handleMessage,
   getStorage,
   setStorage,
+  isValidMangaName,
   parseChapter,
   compareChapterParts,
   shouldUpdateProgress,
@@ -557,7 +559,7 @@ test("SYNC_CHAPTER: concurrent calls via enqueueOperation only invoke createFile
   }
 });
 
-test("DELETE_SERIES: silent auth failure returns error status and sets error badge", async () => {
+test("DELETE_SERIES: silent auth failure returns queued status and sets error badge", async () => {
   const badgeCalls = [];
   try {
     global.chrome = {
@@ -586,7 +588,7 @@ test("DELETE_SERIES: silent auth failure returns error status and sets error bad
     );
     await enqueueOperation(async () => {});
 
-    assert.deepEqual(responseData, { status: "error" });
+    assert.deepEqual(responseData, { status: "queued" });
     assert.equal(badgeCalls.some((c) => c.text === "!"), true);
     assert.equal(badgeCalls.some((c) => c.color === "#c0392b"), true);
   } finally {
@@ -594,7 +596,7 @@ test("DELETE_SERIES: silent auth failure returns error status and sets error bad
   }
 });
 
-test("DELETE_SERIES: findFile error returns error status without creating files", async () => {
+test("DELETE_SERIES: findFile error returns queued status without creating files", async () => {
   const originalFetch = global.fetch;
   try {
     global.chrome = {
@@ -629,7 +631,7 @@ test("DELETE_SERIES: findFile error returns error status without creating files"
     );
     await enqueueOperation(async () => {});
 
-    assert.deepEqual(responseData, { status: "error" });
+    assert.deepEqual(responseData, { status: "queued" });
     assert.equal(createFileCalled, false);
   } finally {
     delete global.chrome;
@@ -754,7 +756,7 @@ test("DELETE_SERIES: aborts without calling PATCH, sets error badge, and respond
       );
       await enqueueOperation(async () => {});
 
-      assert.deepEqual(responseData, { status: "error" }, `Must return error for: ${badContent}`);
+      assert.deepEqual(responseData, { status: "queued" }, `Must return queued for: ${badContent}`);
       assert.equal(patchCalled, false, `PATCH must not be called when Drive JSON is corrupted: ${badContent}`);
       assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge text '!'");
       assert.equal(badgeCalls.some((c) => c.color === "#c0392b"), true, "Must set error badge color");
@@ -1247,5 +1249,482 @@ test("reconciliation failure retention: pending_sync is preserved when Drive fet
   } finally {
     delete global.chrome;
     global.fetch = originalFetch;
+  }
+});
+
+test("AC-7 & Blocker 1: SYNC_CHAPTER enqueues mutation to pending_sync and retains optimistic series when Drive fetch/create/patch fails", async () => {
+  const originalFetch = global.fetch;
+
+  // Case 1: Drive uploadDriveVault (PATCH) returns HTTP 503
+  {
+    const badgeCalls = [];
+    const mockStorage = createMockStorage({
+      fileId: "vault-sync-patch-err",
+      series: { "Solo Leveling": { chapter: "100", updated: "2026-11-20T00:00:00Z" } },
+      pending_sync: [],
+      lastSync: "2026-11-20T00:00:00Z",
+    });
+
+    try {
+      global.chrome = {
+        action: {
+          setBadgeText: (arg) => badgeCalls.push(arg),
+          setBadgeBackgroundColor: (arg) => badgeCalls.push(arg),
+        },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async (url, opts) => {
+        if (url.includes("/vault-sync-patch-err?alt=media")) {
+          return {
+            ok: true,
+            text: async () => JSON.stringify({ series: { "Solo Leveling": { chapter: "100" } } }),
+          };
+        }
+        if (opts?.method === "PATCH") {
+          return { ok: false, status: 503 };
+        }
+        return { ok: true, json: async () => ({}) };
+      };
+
+      handleMessage({
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Solo Leveling", chapter: "101", url: "https://test.com/ch101" },
+      });
+      await enqueueOperation(async () => {});
+
+      const store = mockStorage.getStore();
+      assert.equal(store.series["Solo Leveling"].chapter, "101", "Must update local cache optimistically");
+      assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated when Drive PATCH fails");
+      assert.equal(store.pending_sync.length, 1, "Must enqueue mutation to pending_sync");
+      assert.equal(store.pending_sync[0].type, "SYNC_CHAPTER");
+      assert.equal(store.pending_sync[0].payload.chapter, "101");
+      assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge on PATCH failure");
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Case 2: Drive fetch (GET) throws network rejection (Failed to fetch)
+  {
+    const badgeCalls = [];
+    const mockStorage = createMockStorage({
+      fileId: "vault-net-err",
+      series: {},
+      pending_sync: [],
+    });
+
+    try {
+      global.chrome = {
+        action: {
+          setBadgeText: (arg) => badgeCalls.push(arg),
+          setBadgeBackgroundColor: (arg) => badgeCalls.push(arg),
+        },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async () => {
+        throw new TypeError("Failed to fetch (offline or network down)");
+      };
+
+      handleMessage({
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Omniscient Reader", chapter: "50", url: "https://test.com/orv50" },
+      });
+      await enqueueOperation(async () => {});
+
+      const store = mockStorage.getStore();
+      assert.equal(store.series["Omniscient Reader"].chapter, "50", "Must update local cache optimistically");
+      assert.equal(store.lastSync, undefined, "lastSync must NOT be set on network error");
+      assert.equal(store.pending_sync.length, 1, "Must enqueue mutation to pending_sync");
+      assert.equal(store.pending_sync[0].payload.manga, "Omniscient Reader");
+      assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge on network rejection");
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Case 3: Drive createFile (POST) returns HTTP 500
+  {
+    const badgeCalls = [];
+    const mockStorage = createMockStorage({
+      fileId: null,
+      series: {},
+      pending_sync: [],
+    });
+
+    try {
+      global.chrome = {
+        action: {
+          setBadgeText: (arg) => badgeCalls.push(arg),
+          setBadgeBackgroundColor: (arg) => badgeCalls.push(arg),
+        },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async (url, opts) => {
+        if (url.includes("/drive/v3/files?")) {
+          return { ok: true, json: async () => ({ files: [] }) }; // not found -> triggers createFile
+        }
+        if (opts?.method === "POST") {
+          return { ok: false, status: 500 };
+        }
+        return { ok: true, json: async () => ({}) };
+      };
+
+      handleMessage({
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Chainsaw Man", chapter: "10", url: "https://test.com/csm10" },
+      });
+      await enqueueOperation(async () => {});
+
+      const store = mockStorage.getStore();
+      assert.equal(store.series["Chainsaw Man"].chapter, "10", "Must update local cache optimistically");
+      assert.equal(store.pending_sync.length, 1, "Must enqueue mutation when createFile fails");
+      assert.equal(store.pending_sync[0].payload.manga, "Chainsaw Man");
+      assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge when createFile fails");
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+});
+
+test("AC-7 & Blocker 1: DELETE_SERIES enqueues mutation to pending_sync and responds with queued when Drive PATCH or GET fails", async () => {
+  const originalFetch = global.fetch;
+
+  // Case 1: Drive PATCH fails with HTTP 500
+  {
+    const mockStorage = createMockStorage({
+      fileId: "vault-del-patch-fail",
+      series: { "Solo Leveling": { chapter: "150" } },
+      pending_sync: [],
+      lastSync: "2026-11-20T00:00:00Z",
+    });
+
+    try {
+      global.chrome = {
+        action: {
+          setBadgeText: () => {},
+          setBadgeBackgroundColor: () => {},
+        },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async (url, opts) => {
+        if (url.includes("/vault-del-patch-fail?alt=media")) {
+          return {
+            ok: true,
+            text: async () => JSON.stringify({ series: { "Solo Leveling": { chapter: "150" } } }),
+          };
+        }
+        if (opts?.method === "PATCH") {
+          return { ok: false, status: 500 };
+        }
+        return { ok: true, json: async () => ({}) };
+      };
+
+      let responseData = null;
+      handleMessage(
+        {
+          type: "DELETE_SERIES",
+          payload: { manga: "Solo Leveling" },
+        },
+        {},
+        (res) => {
+          responseData = res;
+        },
+      );
+      await enqueueOperation(async () => {});
+
+      const store = mockStorage.getStore();
+      assert.equal(store.series["Solo Leveling"], undefined, "Series must be removed optimistically from local cache");
+      assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated when PATCH fails");
+      assert.equal(store.pending_sync.length, 1, "Must enqueue DELETE_SERIES mutation");
+      assert.equal(store.pending_sync[0].type, "DELETE_SERIES");
+      assert.equal(store.pending_sync[0].payload.manga, "Solo Leveling");
+      assert.deepEqual(responseData, { status: "queued" }, "Must respond with queued status to popup");
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Case 2: Drive fetch network rejection
+  {
+    const mockStorage = createMockStorage({
+      fileId: "vault-del-net-fail",
+      series: { "Tower of God": { chapter: "300" } },
+      pending_sync: [],
+    });
+
+    try {
+      global.chrome = {
+        action: {
+          setBadgeText: () => {},
+          setBadgeBackgroundColor: () => {},
+        },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async () => {
+        throw new TypeError("Network connection lost");
+      };
+
+      let responseData = null;
+      handleMessage(
+        {
+          type: "DELETE_SERIES",
+          payload: { manga: "Tower of God" },
+        },
+        {},
+        (res) => {
+          responseData = res;
+        },
+      );
+      await enqueueOperation(async () => {});
+
+      const store = mockStorage.getStore();
+      assert.equal(store.series["Tower of God"], undefined, "Series must be removed optimistically");
+      assert.equal(store.pending_sync.length, 1);
+      assert.equal(store.pending_sync[0].payload.manga, "Tower of God");
+      assert.deepEqual(responseData, { status: "queued" });
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+});
+
+test("AC-10 & Blocker 3(b): reconcileAndSync retains pending_sync intact when Drive PATCH or GET network fails", async () => {
+  const originalFetch = global.fetch;
+
+  const queuedMutations = [
+    {
+      type: "SYNC_CHAPTER",
+      payload: { manga: "Recon Test", chapter: "5" },
+      timestamp: "2026-11-22T00:00:00Z",
+    },
+  ];
+
+  // Case 1: Drive PATCH HTTP 500
+  {
+    const mockStorage = createMockStorage({
+      fileId: "vault-recon-patch-fail",
+      series: {},
+      pending_sync: [...queuedMutations],
+      lastSync: "2026-11-20T00:00:00Z",
+    });
+
+    try {
+      global.chrome = {
+        action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async (url, opts) => {
+        if (url.includes("/vault-recon-patch-fail?alt=media")) {
+          return { ok: true, text: async () => JSON.stringify({ series: {} }) };
+        }
+        if (opts?.method === "PATCH") {
+          return { ok: false, status: 500 };
+        }
+        return { ok: true, json: async () => ({}) };
+      };
+
+      const res = await reconcileAndSync({ interactive: false });
+      assert.equal(res.status, "error");
+      const store = mockStorage.getStore();
+      assert.equal(store.pending_sync.length, 1, "pending_sync must be retained intact on PATCH failure");
+      assert.equal(store.pending_sync[0].payload.manga, "Recon Test");
+      assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated");
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Case 2: Drive fetch GET network rejection
+  {
+    const mockStorage = createMockStorage({
+      fileId: "vault-recon-get-fail",
+      series: {},
+      pending_sync: [...queuedMutations],
+    });
+
+    try {
+      global.chrome = {
+        action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+        storage: { local: mockStorage },
+        identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+      };
+
+      global.fetch = async () => {
+        throw new Error("DNS resolution failed");
+      };
+
+      const res = await reconcileAndSync({ interactive: false });
+      assert.equal(res.status, "error");
+      const store = mockStorage.getStore();
+      assert.equal(store.pending_sync.length, 1, "pending_sync must be retained intact on GET network rejection");
+    } finally {
+      delete global.chrome;
+      global.fetch = originalFetch;
+    }
+  }
+});
+
+test("AC-10 & Blocker 3(c): Re-entrancy / snapshot-prefix safety: mutations appended during in-flight PATCH are preserved", async () => {
+  const originalFetch = global.fetch;
+
+  const initialMutations = [
+    { type: "SYNC_CHAPTER", payload: { manga: "Mut1", chapter: "1" }, timestamp: "2026-11-22T00:00:00Z" },
+    { type: "SYNC_CHAPTER", payload: { manga: "Mut2", chapter: "2" }, timestamp: "2026-11-22T00:01:00Z" },
+  ];
+
+  const mockStorage = createMockStorage({
+    fileId: "vault-snapshot-safety",
+    series: {},
+    pending_sync: [...initialMutations],
+  });
+
+  try {
+    global.chrome = {
+      action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+      storage: { local: mockStorage },
+      identity: { getAuthToken: async () => ({ token: "valid-tok" }) },
+    };
+
+    const mut3 = {
+      type: "SYNC_CHAPTER",
+      payload: { manga: "Mut3 (Appended In-Flight)", chapter: "3" },
+      timestamp: "2026-11-22T00:02:00Z",
+    };
+
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-snapshot-safety?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify({ series: {} }) };
+      }
+      if (opts?.method === "PATCH") {
+        // While PATCH is in flight, append Mut3 to pending_sync
+        const currentStore = mockStorage.getStore();
+        mockStorage.set({ pending_sync: [...currentStore.pending_sync, mut3] });
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const res = await reconcileAndSync({ interactive: false });
+    assert.equal(res.status, "success");
+
+    const finalStore = mockStorage.getStore();
+    assert.equal(finalStore.pending_sync.length, 1, "Only the snapshotted prefix should be removed");
+    assert.equal(finalStore.pending_sync[0].payload.manga, "Mut3 (Appended In-Flight)", "In-flight appended mutation must be preserved");
+    assert.equal(finalStore.series["Mut1"].chapter, "1");
+    assert.equal(finalStore.series["Mut2"].chapter, "2");
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("Warning #3: Object prototype safety & message validation", async () => {
+  // 1. isValidMangaName validation
+  assert.equal(isValidMangaName("Solo Leveling"), true);
+  assert.equal(isValidMangaName("  Solo Leveling  "), true);
+  assert.equal(isValidMangaName(""), false);
+  assert.equal(isValidMangaName("   "), false);
+  assert.equal(isValidMangaName(null), false);
+  assert.equal(isValidMangaName(undefined), false);
+  assert.equal(isValidMangaName(123), false);
+  assert.equal(isValidMangaName({}), false);
+  assert.equal(isValidMangaName("__proto__"), false);
+  assert.equal(isValidMangaName("constructor"), false);
+  assert.equal(isValidMangaName("prototype"), false);
+
+  // 2. handleMessage null/malformed guards
+  assert.doesNotThrow(() => handleMessage(null));
+  assert.doesNotThrow(() => handleMessage(undefined));
+  assert.doesNotThrow(() => handleMessage("string message"));
+  assert.doesNotThrow(() => handleMessage(42));
+
+  // 3. Reject prototype pollution payloads in SYNC_CHAPTER
+  let chapterRes = null;
+  handleMessage(
+    { type: "SYNC_CHAPTER", payload: { manga: "__proto__", chapter: "1" } },
+    {},
+    (res) => { chapterRes = res; },
+  );
+  await enqueueOperation(async () => {});
+  assert.deepEqual(chapterRes, { status: "ignored", reason: "invalid_manga_name" });
+
+  // 4. Reject prototype pollution payloads in DELETE_SERIES
+  let deleteRes = null;
+  handleMessage(
+    { type: "DELETE_SERIES", payload: { manga: "prototype" } },
+    {},
+    (res) => { deleteRes = res; },
+  );
+  await enqueueOperation(async () => {});
+  assert.deepEqual(deleteRes, { status: "error", error: "Invalid manga name" });
+});
+
+test("Warning #4: clearBadge helper and badge state reset on SYNC_VAULT success", async () => {
+  const badgeCalls = [];
+  try {
+    global.chrome = {
+      action: {
+        setBadgeText: (arg) => badgeCalls.push(arg),
+        setBadgeBackgroundColor: (arg) => badgeCalls.push(arg),
+      },
+    };
+
+    // 1. Set error badge first
+    setErrorBadge();
+    assert.equal(badgeCalls.some((c) => c.text === "!"), true);
+
+    // 2. clearBadge() resets text to empty and clears timer
+    badgeCalls.length = 0;
+    clearBadge();
+    assert.equal(badgeCalls.some((c) => c.text === ""), true);
+
+    // 3. SYNC_VAULT success clears prior error badge
+    setErrorBadge();
+    const mockStorage = createMockStorage({
+      fileId: "vault-clear-badge",
+      series: { "Solo Leveling": { chapter: "10" } },
+      pending_sync: [],
+    });
+    global.chrome.storage = { local: mockStorage };
+    global.chrome.identity = { getAuthToken: async () => ({ token: "valid-tok" }) };
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url) => {
+      if (url.includes("/vault-clear-badge?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify({ series: { "Solo Leveling": { chapter: "10" } } }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    badgeCalls.length = 0;
+    let syncVaultRes = null;
+    handleMessage({ type: "SYNC_VAULT" }, {}, (res) => {
+      syncVaultRes = res;
+    });
+    await enqueueOperation(async () => {});
+
+    assert.equal(syncVaultRes.status, "success");
+    assert.equal(badgeCalls.some((c) => c.text === ""), true, "SYNC_VAULT success must clear prior error badge");
+    global.fetch = originalFetch;
+  } finally {
+    delete global.chrome;
   }
 });

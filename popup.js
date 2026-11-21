@@ -9,6 +9,16 @@ let filterContainer = null;
 
 let allSeries = [];
 
+function isSafeUrl(url) {
+  if (typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function getStorage(keys) {
   if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
     return {};
@@ -112,7 +122,7 @@ const renderList = (series) => {
     readLink.className = "btn-read";
     readLink.target = "_blank";
     readLink.rel = "noopener noreferrer";
-    readLink.href = info.url || "#";
+    readLink.href = isSafeUrl(info.url) ? info.url : "#";
     const readImg = document.createElement("img");
     readImg.src = "arrow-right.svg";
     readImg.alt = "Continue reading";
@@ -168,7 +178,12 @@ const renderList = (series) => {
               payload: { manga: mangaName },
             },
             (response) => {
-              if (response && response.status === "success") {
+              if (chrome.runtime && chrome.runtime.lastError) {
+                console.warn("[Sanctum] Delete message error:", chrome.runtime.lastError);
+                this.innerText = "Error";
+                return;
+              }
+              if (response && (response.status === "success" || response.status === "queued")) {
                 allSeries = allSeries.filter(([n]) => n !== mangaName);
                 card.remove();
                 if (allSeries.length === 0 && listElement) {
@@ -212,60 +227,83 @@ const applyFilters = () => {
   renderList(filtered);
 };
 
-const syncVault = async () => {
+const syncVault = async (opts = {}) => {
   if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
     return;
   }
 
+  const interactive = Boolean(opts.interactive);
+
   return new Promise((resolve) => {
-    chrome.runtime.sendMessage({ type: "SYNC_VAULT" }, (response) => {
-      if (response && response.status === "success") {
-        if (loadingElement) loadingElement.style.display = "none";
-        const seriesData =
-          response.series && typeof response.series === "object" ? response.series : {};
-        allSeries = Object.entries(seriesData).sort((a, b) =>
-          a[0].localeCompare(b[0]),
-        );
-        applyFilters();
-        if (statusElement) {
-          const syncDate = response.lastSync ? new Date(response.lastSync) : new Date();
-          statusElement.innerText = `Last updated: ${syncDate.toLocaleTimeString()}`;
-        }
-      } else {
-        // Offline or sync failure: preserve cached series!
-        if (loadingElement) loadingElement.style.display = "none";
-        if (allSeries.length === 0) {
-          if (listElement) {
-            listElement.innerHTML =
-              "<div class='status'>Vault is empty. Start reading!</div>";
-          }
+    chrome.runtime.sendMessage(
+      {
+        type: "SYNC_VAULT",
+        payload: { interactive },
+      },
+      (response) => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          console.warn("[Sanctum] SYNC_VAULT error:", chrome.runtime.lastError);
+          if (loadingElement) loadingElement.style.display = "none";
           if (statusElement) {
             statusElement.innerText =
-              response?.status === "offline"
-                ? "Offline mode."
-                : "Error accessing Vault. Check your connection.";
-          }
-        } else {
-          if (statusElement) {
-            statusElement.innerText =
-              response?.status === "offline"
-                ? "Offline (showing cached)."
+              allSeries.length === 0
+                ? "Error accessing Vault. Check your connection."
                 : "Sync failed (showing cached).";
           }
+          resolve({ status: "error", error: chrome.runtime.lastError.message });
+          return;
         }
-      }
-      resolve(response);
-    });
+
+        if (response && response.status === "success") {
+          if (loadingElement) loadingElement.style.display = "none";
+          const seriesData =
+            response.series && typeof response.series === "object" ? response.series : {};
+          allSeries = Object.entries(seriesData).sort((a, b) =>
+            a[0].localeCompare(b[0]),
+          );
+          applyFilters();
+          if (statusElement) {
+            const syncDate = response.lastSync ? new Date(response.lastSync) : new Date();
+            statusElement.innerText = `Last updated: ${syncDate.toLocaleTimeString()}`;
+          }
+        } else {
+          // Offline or sync failure: preserve cached series!
+          if (loadingElement) loadingElement.style.display = "none";
+          if (allSeries.length === 0) {
+            if (listElement) {
+              listElement.innerHTML =
+                "<div class='status'>Vault is empty. Start reading!</div>";
+            }
+            if (statusElement) {
+              statusElement.innerText =
+                response?.status === "offline"
+                  ? "Offline mode."
+                  : "Error accessing Vault. Check your connection.";
+            }
+          } else {
+            if (statusElement) {
+              statusElement.innerText =
+                response?.status === "offline"
+                  ? "Offline (showing cached)."
+                  : "Sync failed (showing cached).";
+            }
+          }
+        }
+        resolve(response);
+      },
+    );
   });
 };
 
 const loadVault = async () => {
+  let hasCachedData = false;
   // 1. Read local cache and render immediately (sub-10ms perceived latency)
   try {
     const cached = await getStorage(["series", "lastSync"]);
     if (cached && cached.series && typeof cached.series === "object") {
       const entries = Object.entries(cached.series);
       if (entries.length > 0) {
+        hasCachedData = true;
         allSeries = entries.sort((a, b) => a[0].localeCompare(b[0]));
         if (loadingElement) loadingElement.style.display = "none";
         applyFilters();
@@ -278,8 +316,9 @@ const loadVault = async () => {
     console.warn("[Sanctum] Could not read local cache:", err);
   }
 
-  // 2. Trigger background cloud sync in parallel
-  await syncVault();
+  // 2. Trigger background cloud sync in parallel:
+  // If cache is empty (first run / new install), trigger interactive auth so user can onboard
+  await syncVault({ interactive: !hasCachedData });
 };
 
 function initPopupDom() {
@@ -326,7 +365,7 @@ function initPopupDom() {
       const allRadio = document.querySelector('input[name="filter"][value="all"]');
       if (allRadio) allRadio.checked = true;
 
-      syncVault().finally(() => {
+      syncVault({ interactive: true }).finally(() => {
         setTimeout(() => {
           if (refreshBtn) refreshBtn.classList.remove("spinning");
         }, 500);
@@ -352,6 +391,7 @@ if (typeof module !== "undefined" && module.exports) {
     syncVault,
     loadVault,
     initPopupDom,
+    isSafeUrl,
     getAllSeries: () => allSeries,
     setAllSeries: (s) => {
       allSeries = s;

@@ -90,7 +90,6 @@ function isValidChapter(ch) {
 }
 
 let activeRetryTimer = null;
-let activeRouteChangeTimer = null;
 let lastUrl = typeof window !== "undefined" && window.location ? window.location.href : "";
 
 // Dwell and scroll-depth tracking for current chapter route
@@ -106,10 +105,6 @@ function clearAllTimers() {
   if (activeRetryTimer) {
     clearTimeout(activeRetryTimer);
     activeRetryTimer = null;
-  }
-  if (activeRouteChangeTimer) {
-    clearTimeout(activeRouteChangeTimer);
-    activeRouteChangeTimer = null;
   }
   dwellSatisfied = false;
 }
@@ -148,6 +143,40 @@ function isScrollDepthSatisfied() {
   return getScrollDepth() > 0.25;
 }
 
+function extractPageMetadata() {
+  if (typeof window === "undefined" || typeof document === "undefined") return null;
+  const hostname = window.location.hostname ? window.location.hostname.toLowerCase() : "";
+  const domain = Object.keys(SITE_CONFIGS).find(
+    (configuredDomain) =>
+      hostname === configuredDomain || hostname.endsWith("." + configuredDomain),
+  );
+  const config = domain ? SITE_CONFIGS[domain] : undefined;
+  if (!config) return null;
+
+  const currentUrl = window.location.href;
+  const path = window.location.pathname;
+  const match = path ? path.match(config.regex) : null;
+  if (!match) return null;
+
+  const mangaTitle = config.titleIndex
+    ? config.getTitle(match)
+    : config.getTitle(document);
+  const chapterNumber = config.getChapter
+    ? config.getChapter(match, document)
+    : match[config.chapterIndex];
+
+  if (!isValidTitle(mangaTitle) || !isValidChapter(chapterNumber)) {
+    return null;
+  }
+
+  return {
+    manga: typeof mangaTitle === "string" ? mangaTitle.trim() : mangaTitle,
+    chapter: chapterNumber,
+    url: currentUrl,
+    site: domain,
+  };
+}
+
 function maybeDispatchSync() {
   if (typeof window === "undefined" || !window.location) return;
   const currentUrl = window.location.href;
@@ -163,6 +192,12 @@ function maybeDispatchSync() {
 
   // Both 15-second dwell and >25% scroll depth must hold
   if (dwellSatisfied && isScrollDepthSatisfied()) {
+    // Re-extract metadata at dispatch time to guard against SPA DOM race conditions
+    const freshPayload = extractPageMetadata();
+    if (freshPayload && freshPayload.url === currentUrl) {
+      detectedChapterPayload = freshPayload;
+    }
+
     dispatchedForUrl = currentUrl;
     if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
       chrome.runtime.sendMessage({
@@ -320,12 +355,12 @@ if (typeof module !== "undefined" && module.exports) {
     init,
     getScrollDepth,
     isScrollDepthSatisfied,
+    extractPageMetadata,
     maybeDispatchSync,
     onScroll,
     onUrlChange,
     handleRouteChange,
     getActiveRetryTimer: () => activeRetryTimer,
-    getActiveRouteChangeTimer: () => activeRouteChangeTimer,
     getDwellSatisfied: () => dwellSatisfied,
     getDispatchedForUrl: () => dispatchedForUrl,
     getDetectedChapterPayload: () => detectedChapterPayload,

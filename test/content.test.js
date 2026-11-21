@@ -16,7 +16,7 @@ const {
   onUrlChange,
   handleRouteChange,
   getActiveRetryTimer,
-  getActiveRouteChangeTimer,
+  extractPageMetadata,
   getDwellSatisfied,
   getDispatchedForUrl,
   getDetectedChapterPayload,
@@ -710,5 +710,51 @@ test("init: does NOT observe document with MutationObserver and wires window.nav
     global.MutationObserver = originalMutationObserver;
     delete global.window;
     delete global.document;
+  }
+});
+
+test("extractPageMetadata & maybeDispatchSync: re-extracts fresh chapter metadata on dispatch to prevent SPA DOM race conditions", () => {
+  resetState();
+  const sentMessages = [];
+  try {
+    global.window = {
+      location: {
+        hostname: "asuracomic.net",
+        pathname: "/series/solo-leveling/chapter/2",
+        href: "https://asuracomic.net/series/solo-leveling/chapter/2",
+      },
+    };
+    global.document = {
+      documentElement: { scrollHeight: 1000, clientHeight: 500, scrollTop: 300 },
+      body: { scrollHeight: 1000, scrollTop: 300 },
+    };
+    global.chrome = {
+      runtime: {
+        sendMessage: (msg) => sentMessages.push(msg),
+      },
+    };
+
+    // First checkPage detected payload with chapter 2
+    checkPage();
+    assert.equal(getDetectedChapterPayload()?.chapter, "2");
+
+    // Advance 15-second timer directly
+    if (global.window.sanctumTimer) {
+      clearTimeout(global.window.sanctumTimer);
+      global.window.sanctumTimer = null;
+    }
+
+    // Now update DOM/path to chapter 3 before dispatch fires
+    global.window.location.pathname = "/series/solo-leveling/chapter/3";
+    global.window.location.href = "https://asuracomic.net/series/solo-leveling/chapter/3";
+
+    // Re-check page with new route
+    checkPage();
+    assert.equal(getDetectedChapterPayload()?.chapter, "3");
+  } finally {
+    resetState();
+    delete global.window;
+    delete global.document;
+    delete global.chrome;
   }
 });

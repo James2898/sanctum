@@ -215,3 +215,145 @@ test("popup loadVault: preserves cached series and displays friendly status when
   delete global.window;
   delete global.chrome;
 });
+
+test("popup isSafeUrl: allows http/https and rejects unsafe schemes", () => {
+  const { isSafeUrl } = require("../popup.js");
+  assert.equal(isSafeUrl("https://mangadex.org/title/123"), true);
+  assert.equal(isSafeUrl("http://asuracomic.net/series/solo"), true);
+  assert.equal(isSafeUrl("javascript:alert(1)"), false);
+  assert.equal(isSafeUrl("data:text/html,<h1>XSS</h1>"), false);
+  assert.equal(isSafeUrl("vbscript:msgbox"), false);
+  assert.equal(isSafeUrl(""), false);
+  assert.equal(isSafeUrl(null), false);
+  assert.equal(isSafeUrl(undefined), false);
+});
+
+test("Blocker #2: loadVault triggers interactive: true on empty cache and interactive: false when cache is populated", async () => {
+  const { elements } = setupMockDom();
+  const { loadVault, setAllSeries, initPopupDom } = require("../popup.js");
+  initPopupDom();
+
+  const sentMessages = [];
+  global.chrome = {
+    storage: {
+      local: {
+        get: (keys, cb) => {
+          // Empty cache on first run
+          const res = { series: {}, lastSync: null };
+          if (typeof cb === "function") cb(res);
+          return Promise.resolve(res);
+        },
+      },
+    },
+    runtime: {
+      sendMessage: (msg, cb) => {
+        sentMessages.push(msg);
+        if (typeof cb === "function") cb({ status: "success", series: {} });
+      },
+    },
+  };
+
+  setAllSeries([]);
+  await loadVault();
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].type, "SYNC_VAULT");
+  assert.deepEqual(sentMessages[0].payload, { interactive: true }, "First run with empty cache must trigger interactive auth for onboarding");
+
+  // Now test with populated cache
+  sentMessages.length = 0;
+  global.chrome.storage.local.get = (keys, cb) => {
+    const res = { series: { "Solo Leveling": { chapter: "1" } }, lastSync: "2026-11-22T00:00:00Z" };
+    if (typeof cb === "function") cb(res);
+    return Promise.resolve(res);
+  };
+
+  await loadVault();
+  assert.equal(sentMessages.length, 1);
+  assert.deepEqual(sentMessages[0].payload, { interactive: false }, "Cached render must trigger silent non-interactive cloud sync");
+
+  delete global.document;
+  delete global.window;
+  delete global.chrome;
+});
+
+test("Blocker #2: refresh button triggers interactive: true OAuth refresh", async () => {
+  const { elements } = setupMockDom();
+  const { initPopupDom } = require("../popup.js");
+  initPopupDom();
+
+  const sentMessages = [];
+  global.chrome = {
+    runtime: {
+      sendMessage: (msg, cb) => {
+        sentMessages.push(msg);
+        if (typeof cb === "function") cb({ status: "success", series: {} });
+      },
+    },
+  };
+
+  const refreshBtn = elements["refresh-btn"];
+  assert.ok(refreshBtn);
+  refreshBtn.trigger("click");
+
+  assert.equal(sentMessages.length, 1);
+  assert.equal(sentMessages[0].type, "SYNC_VAULT");
+  assert.deepEqual(sentMessages[0].payload, { interactive: true }, "Manual refresh must pass interactive: true");
+
+  delete global.document;
+  delete global.window;
+  delete global.chrome;
+});
+
+test("Warning #4 & #6: delete button handles queued status and readLink sanitizes unsafe URLs", () => {
+  const { elements } = setupMockDom();
+  const { renderList, getAllSeries, setAllSeries, initPopupDom } = require("../popup.js");
+  initPopupDom();
+
+  const series = [
+    [
+      "XSS Manga",
+      {
+        chapter: "1",
+        url: "javascript:alert('pwned')",
+        updated: "2026-11-22T00:00:00Z",
+      },
+    ],
+  ];
+
+  setAllSeries([...series]);
+  renderList(series);
+
+  const card = elements["list"].children[0];
+  assert.ok(card);
+
+  // Warning #6: readLink must NOT use javascript: URL
+  const infoRow = card.children[1];
+  const actionsDiv = infoRow.children[1];
+  const readLink = actionsDiv.children[0];
+  assert.equal(readLink.href, "#", "Unsafe URL schemes must fallback to '#'");
+
+  // Warning #4: delete handles { status: 'queued' }
+  const deleteBtn = actionsDiv.children[1];
+  global.confirm = () => true;
+
+  let messageSent = null;
+  global.chrome = {
+    runtime: {
+      sendMessage: (msg, cb) => {
+        messageSent = msg;
+        cb({ status: "queued" });
+      },
+    },
+  };
+
+  deleteBtn.trigger("click");
+  assert.equal(messageSent.type, "DELETE_SERIES");
+  assert.equal(getAllSeries().length, 0, "Card must be removed from series list when background returns queued");
+  assert.ok(elements["list"].innerHTML.includes("Vault is empty"), "Empty status should display");
+
+  delete global.confirm;
+  delete global.document;
+  delete global.window;
+  delete global.chrome;
+});
