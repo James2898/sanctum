@@ -1,19 +1,27 @@
-const listElement = document.getElementById("list");
-const loadingElement = document.getElementById("loading");
-const statusElement = document.getElementById("status");
-const refreshBtn = document.getElementById("refresh-btn");
-const searchInput = document.getElementById("search-field");
-const mangaPreview = document.getElementById("manga-preview");
-const previewImage = document.getElementById("preview-img");
-const filterContainer = document.getElementById("filter-container");
+let listElement = null;
+let loadingElement = null;
+let statusElement = null;
+let refreshBtn = null;
+let searchInput = null;
+let mangaPreview = null;
+let previewImage = null;
+let filterContainer = null;
 
 let allSeries = [];
 
-previewImage.addEventListener("error", () => {
-  mangaPreview.style.display = "none";
-});
+async function getStorage(keys) {
+  if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+    return {};
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.get(keys, (result) => {
+      resolve(result || {});
+    });
+  });
+}
 
 const renderList = (series) => {
+  if (!listElement) return;
   listElement.innerHTML = "";
 
   if (series.length === 0) {
@@ -128,7 +136,7 @@ const renderList = (series) => {
     card.appendChild(infoRow);
 
     // Art Cover Preview Function
-    if (info.cover) {
+    if (info.cover && mangaPreview && previewImage) {
       titleEl.addEventListener("mouseenter", () => {
         previewImage.src = info.cover;
         mangaPreview.style.display = "block";
@@ -153,24 +161,26 @@ const renderList = (series) => {
       const mangaName = this.getAttribute("data-manga");
       if (confirm(`Delete ${mangaName} from your history?`)) {
         this.innerText = "Deleting...";
-        chrome.runtime.sendMessage(
-          {
-            type: "DELETE_SERIES",
-            payload: { manga: mangaName },
-          },
-          (response) => {
-            if (response && response.status === "success") {
-              allSeries = allSeries.filter(([n]) => n !== mangaName);
-              card.remove();
-              if (allSeries.length === 0) {
-                listElement.innerHTML =
-                  "<div class='status'>Vault is empty. Start reading!</div>";
+        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+          chrome.runtime.sendMessage(
+            {
+              type: "DELETE_SERIES",
+              payload: { manga: mangaName },
+            },
+            (response) => {
+              if (response && response.status === "success") {
+                allSeries = allSeries.filter(([n]) => n !== mangaName);
+                card.remove();
+                if (allSeries.length === 0 && listElement) {
+                  listElement.innerHTML =
+                    "<div class='status'>Vault is empty. Start reading!</div>";
+                }
+              } else {
+                this.innerText = "Error";
               }
-            } else {
-              this.innerText = "Error";
-            }
-          },
-        );
+            },
+          );
+        }
       }
     });
 
@@ -179,9 +189,14 @@ const renderList = (series) => {
 };
 
 const applyFilters = () => {
-  const searchText = searchInput.value.trim().toLowerCase();
+  const searchText =
+    searchInput && typeof searchInput.value === "string"
+      ? searchInput.value.trim().toLowerCase()
+      : "";
   const selectedFilter =
-    document.querySelector('input[name="filter"]:checked')?.value || "all";
+    (typeof document !== "undefined" &&
+      document.querySelector('input[name="filter"]:checked')?.value) ||
+    "all";
 
   let filtered = allSeries;
   if (selectedFilter !== "all") {
@@ -197,89 +212,149 @@ const applyFilters = () => {
   renderList(filtered);
 };
 
-const loadVault = async () => {
-  try {
-    // 1. Get the token
-    const tokenObj = await chrome.identity.getAuthToken({ interactive: true });
-    if (!tokenObj || !tokenObj.token) {
-      throw new Error("Failed to get authentication token");
-    }
-
-    // 2. Find the file
-    const searchRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=name='sanctum_history.json' and trashed=false`,
-      {
-        headers: { Authorization: `Bearer ${tokenObj.token}` },
-      },
-    );
-    if (!searchRes.ok) {
-      throw new Error(`Drive search failed: ${searchRes.status}`);
-    }
-    const { files } = await searchRes.json();
-
-    if (!files || files.length === 0) {
-      loadingElement.style.display = "none";
-      listElement.innerHTML =
-        "<div class='status'>Vault is empty. Start reading!</div>";
-      return;
-    }
-
-    // 3. Fetch the JSON content
-    const contentRes = await fetch(
-      `https://www.googleapis.com/drive/v3/files/${files[0].id}?alt=media`,
-      {
-        headers: { Authorization: `Bearer ${tokenObj.token}` },
-      },
-    );
-    if (!contentRes.ok) {
-      throw new Error(`Drive fetch failed: ${contentRes.status}`);
-    }
-    const data = await contentRes.json();
-
-    // 4. Render the Dashboard
-    loadingElement.style.display = "none";
-    const seriesData =
-      data && data.series && typeof data.series === "object" ? data.series : {};
-    allSeries = Object.entries(seriesData).sort((a, b) =>
-      a[0].localeCompare(b[0]),
-    );
-
-    applyFilters();
-
-    statusElement.innerText = `Last updated: ${new Date().toLocaleTimeString()}`;
-  } catch (err) {
-    console.error(err);
-    loadingElement.innerText = "Error accessing Vault.";
-    statusElement.innerText = "Check your connection.";
+const syncVault = async () => {
+  if (typeof chrome === "undefined" || !chrome.runtime || !chrome.runtime.sendMessage) {
+    return;
   }
+
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "SYNC_VAULT" }, (response) => {
+      if (response && response.status === "success") {
+        if (loadingElement) loadingElement.style.display = "none";
+        const seriesData =
+          response.series && typeof response.series === "object" ? response.series : {};
+        allSeries = Object.entries(seriesData).sort((a, b) =>
+          a[0].localeCompare(b[0]),
+        );
+        applyFilters();
+        if (statusElement) {
+          const syncDate = response.lastSync ? new Date(response.lastSync) : new Date();
+          statusElement.innerText = `Last updated: ${syncDate.toLocaleTimeString()}`;
+        }
+      } else {
+        // Offline or sync failure: preserve cached series!
+        if (loadingElement) loadingElement.style.display = "none";
+        if (allSeries.length === 0) {
+          if (listElement) {
+            listElement.innerHTML =
+              "<div class='status'>Vault is empty. Start reading!</div>";
+          }
+          if (statusElement) {
+            statusElement.innerText =
+              response?.status === "offline"
+                ? "Offline mode."
+                : "Error accessing Vault. Check your connection.";
+          }
+        } else {
+          if (statusElement) {
+            statusElement.innerText =
+              response?.status === "offline"
+                ? "Offline (showing cached)."
+                : "Sync failed (showing cached).";
+          }
+        }
+      }
+      resolve(response);
+    });
+  });
 };
 
-// Search Field & Filter By Mangasites
-searchInput.addEventListener("input", applyFilters);
-filterContainer.addEventListener("change", (e) => {
-  if (e.target.name === "filter") {
-    applyFilters();
+const loadVault = async () => {
+  // 1. Read local cache and render immediately (sub-10ms perceived latency)
+  try {
+    const cached = await getStorage(["series", "lastSync"]);
+    if (cached && cached.series && typeof cached.series === "object") {
+      const entries = Object.entries(cached.series);
+      if (entries.length > 0) {
+        allSeries = entries.sort((a, b) => a[0].localeCompare(b[0]));
+        if (loadingElement) loadingElement.style.display = "none";
+        applyFilters();
+        if (statusElement && cached.lastSync) {
+          statusElement.innerText = `Last updated: ${new Date(cached.lastSync).toLocaleTimeString()}`;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[Sanctum] Could not read local cache:", err);
   }
-});
 
-// Refresh Button
-refreshBtn.addEventListener("click", () => {
-  refreshBtn.classList.add("spinning");
-  listElement.innerHTML = "";
-  listElement.scrollTop = 0;
-  loadingElement.style.display = "block";
-  loadingElement.innerHTML = `<img src="refresh.svg" class="spinning" /><p>Fetching your records...</p>`;
-  searchInput.value = "";
-  const allRadio = document.querySelector('input[name="filter"][value="all"]');
-  if (allRadio) allRadio.checked = true;
+  // 2. Trigger background cloud sync in parallel
+  await syncVault();
+};
 
-  loadVault().finally(() => {
-    setTimeout(() => {
-      refreshBtn.classList.remove("spinning");
-    }, 500);
-  });
-});
+function initPopupDom() {
+  if (typeof document === "undefined") return;
 
-document.addEventListener("DOMContentLoaded", () => {
-  loadVault();
-});
+  listElement = document.getElementById("list");
+  loadingElement = document.getElementById("loading");
+  statusElement = document.getElementById("status");
+  refreshBtn = document.getElementById("refresh-btn");
+  searchInput = document.getElementById("search-field");
+  mangaPreview = document.getElementById("manga-preview");
+  previewImage = document.getElementById("preview-img");
+  filterContainer = document.getElementById("filter-container");
+
+  if (previewImage) {
+    previewImage.addEventListener("error", () => {
+      if (mangaPreview) mangaPreview.style.display = "none";
+    });
+  }
+
+  if (searchInput) {
+    searchInput.addEventListener("input", applyFilters);
+  }
+
+  if (filterContainer) {
+    filterContainer.addEventListener("change", (e) => {
+      if (e.target && e.target.name === "filter") {
+        applyFilters();
+      }
+    });
+  }
+
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => {
+      refreshBtn.classList.add("spinning");
+      if (allSeries.length === 0) {
+        if (listElement) listElement.innerHTML = "";
+        if (loadingElement) {
+          loadingElement.style.display = "block";
+          loadingElement.innerHTML = `<img src="refresh.svg" class="spinning" /><p>Fetching your records...</p>`;
+        }
+      }
+      if (searchInput) searchInput.value = "";
+      const allRadio = document.querySelector('input[name="filter"][value="all"]');
+      if (allRadio) allRadio.checked = true;
+
+      syncVault().finally(() => {
+        setTimeout(() => {
+          if (refreshBtn) refreshBtn.classList.remove("spinning");
+        }, 500);
+      });
+    });
+  }
+}
+
+if (typeof document !== "undefined") {
+  initPopupDom();
+  if (typeof module === "undefined") {
+    document.addEventListener("DOMContentLoaded", () => {
+      loadVault();
+    });
+  }
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    getStorage,
+    renderList,
+    applyFilters,
+    syncVault,
+    loadVault,
+    initPopupDom,
+    getAllSeries: () => allSeries,
+    setAllSeries: (s) => {
+      allSeries = s;
+    },
+  };
+}

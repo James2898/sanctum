@@ -11,6 +11,14 @@ const {
   setInFlightBadge,
   clearBadgeTimer,
   handleMessage,
+  getStorage,
+  setStorage,
+  parseChapter,
+  compareChapterParts,
+  shouldUpdateProgress,
+  fetchAndValidateDriveVault,
+  uploadDriveVault,
+  reconcileAndSync,
 } = require("../background.js");
 
 test("findFile: returns error when token is missing or falsy", async () => {
@@ -751,6 +759,491 @@ test("DELETE_SERIES: aborts without calling PATCH, sets error badge, and respond
       assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge text '!'");
       assert.equal(badgeCalls.some((c) => c.color === "#c0392b"), true, "Must set error badge color");
     }
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+// Helper for Phase 2 tests
+function createMockStorage(initial = {}) {
+  let store = { ...initial };
+  return {
+    get: (keys, cb) => {
+      let result = {};
+      if (typeof keys === "string") {
+        result[keys] = store[keys];
+      } else if (Array.isArray(keys)) {
+        keys.forEach((k) => {
+          if (store[k] !== undefined) result[k] = store[k];
+        });
+      } else if (keys && typeof keys === "object") {
+        Object.keys(keys).forEach((k) => {
+          result[k] = store[k] !== undefined ? store[k] : keys[k];
+        });
+      } else {
+        result = { ...store };
+      }
+      if (typeof cb === "function") cb(result);
+      return Promise.resolve(result);
+    },
+    set: (items, cb) => {
+      Object.assign(store, items);
+      if (typeof cb === "function") cb();
+      return Promise.resolve();
+    },
+    getStore: () => store,
+  };
+}
+
+test("parseChapter & shouldUpdateProgress: monotonic chapter progress comparison", () => {
+  // 1. Parsing integer, decimal, and fractional
+  assert.deepEqual(parseChapter("100"), { type: "numeric", value: [100] });
+  assert.deepEqual(parseChapter(100), { type: "numeric", value: [100] });
+  assert.deepEqual(parseChapter("150.5"), { type: "numeric", value: [150.5] });
+  assert.deepEqual(parseChapter(150.5), { type: "numeric", value: [150.5] });
+  assert.deepEqual(parseChapter("12-1"), { type: "fractional", value: [12, 1] });
+  assert.deepEqual(parseChapter("12-2"), { type: "fractional", value: [12, 2] });
+  assert.equal(parseChapter("Prologue"), null);
+  assert.equal(parseChapter("Extra"), null);
+  assert.equal(parseChapter(null), null);
+  assert.equal(parseChapter(""), null);
+
+  // 2. Integer progress
+  assert.equal(shouldUpdateProgress("100", "2026-11-22T00:00:00Z", "1", "2026-11-21T00:00:00Z"), true);
+  assert.equal(shouldUpdateProgress("1", "2026-11-22T00:00:00Z", "100", "2026-11-21T00:00:00Z"), false, "Downgrade 100 -> 1 must be rejected");
+  assert.equal(shouldUpdateProgress("100", "2026-11-22T00:00:00Z", "100", "2026-11-21T00:00:00Z"), true, "Equal chapter must be accepted");
+
+  // 3. Decimal progress
+  assert.equal(shouldUpdateProgress("150.5", "2026-11-22T00:00:00Z", "150", "2026-11-21T00:00:00Z"), true);
+  assert.equal(shouldUpdateProgress("150", "2026-11-22T00:00:00Z", "150.5", "2026-11-21T00:00:00Z"), false, "Downgrade 150.5 -> 150 must be rejected");
+  assert.equal(shouldUpdateProgress("150.6", "2026-11-22T00:00:00Z", "150.5", "2026-11-21T00:00:00Z"), true);
+
+  // 4. Fractional / hyphenated progress
+  assert.equal(shouldUpdateProgress("12-2", "2026-11-22T00:00:00Z", "12-1", "2026-11-21T00:00:00Z"), true);
+  assert.equal(shouldUpdateProgress("12-1", "2026-11-22T00:00:00Z", "12-2", "2026-11-21T00:00:00Z"), false, "Downgrade 12-2 -> 12-1 must be rejected");
+  assert.equal(shouldUpdateProgress("13", "2026-11-22T00:00:00Z", "12-2", "2026-11-21T00:00:00Z"), true);
+  assert.equal(shouldUpdateProgress("12-1", "2026-11-22T00:00:00Z", "12", "2026-11-21T00:00:00Z"), true);
+  assert.equal(shouldUpdateProgress("12", "2026-11-22T00:00:00Z", "12-1", "2026-11-21T00:00:00Z"), false, "Downgrade 12-1 -> 12 must be rejected");
+
+  // 5. Non-numeric chapters with timestamp fallback
+  assert.equal(
+    shouldUpdateProgress("Prologue", "2026-11-22T10:00:00Z", "Extra", "2026-11-22T09:00:00Z"),
+    true,
+    "Newer timestamp must be accepted for non-numeric chapters",
+  );
+  assert.equal(
+    shouldUpdateProgress("Prologue", "2026-11-21T00:00:00Z", "100", "2026-11-22T00:00:00Z"),
+    false,
+    "Older timestamp must be rejected for non-numeric chapters",
+  );
+
+  // 6. First read (savedChapter is undefined/null)
+  assert.equal(shouldUpdateProgress("1", "2026-11-22T00:00:00Z", undefined, undefined), true);
+  assert.equal(shouldUpdateProgress("Prologue", "2026-11-22T00:00:00Z", null, null), true);
+});
+
+test("SYNC_CHAPTER: monotonic guard rejects downgrade without updating storage or calling Drive PATCH", async () => {
+  const originalFetch = global.fetch;
+  let patchCalled = false;
+  const mockStorage = createMockStorage({
+    series: {
+      "Solo Leveling": {
+        chapter: "100",
+        url: "https://test.com/ch100",
+        updated: "2026-11-20T00:00:00Z",
+      },
+    },
+    fileId: "vault-file-01",
+    lastSync: "2026-11-20T00:00:00Z",
+    pending_sync: [],
+  });
+
+  const badgeCalls = [];
+  try {
+    global.chrome = {
+      action: {
+        setBadgeText: (arg) => badgeCalls.push(arg),
+        setBadgeBackgroundColor: (arg) => badgeCalls.push(arg),
+      },
+      storage: {
+        local: mockStorage,
+      },
+      identity: {
+        getAuthToken: async () => ({ token: "valid-token" }),
+      },
+    };
+
+    global.fetch = async (url, opts) => {
+      if (opts?.method === "PATCH") patchCalled = true;
+      return { ok: true, status: 200, json: async () => ({ files: [{ id: "vault-file-01" }] }) };
+    };
+
+    // User re-reads Chapter 1 when Chapter 100 is saved
+    handleMessage(
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Solo Leveling", chapter: "1", url: "https://test.com/ch1" },
+      },
+      {},
+      () => {},
+    );
+
+    await enqueueOperation(async () => {});
+
+    // Monotonic guard should reject:
+    assert.equal(patchCalled, false, "Drive PATCH must not be called on downgrade");
+    const store = mockStorage.getStore();
+    assert.equal(store.series["Solo Leveling"].chapter, "100", "Local cache chapter must remain 100");
+    assert.equal(store.pending_sync.length, 0, "Downgrade mutation must NOT be enqueued to pending_sync");
+    assert.equal(badgeCalls.some((c) => c.text === "!"), false, "Error badge must not be set on downgrade");
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("chrome.storage.local: SYNC_CHAPTER caches series, fileId, and updates lastSync on successful Drive sync", async () => {
+  const originalFetch = global.fetch;
+  const mockStorage = createMockStorage();
+  let uploadedPayload = null;
+
+  try {
+    global.chrome = {
+      action: {
+        setBadgeText: () => {},
+        setBadgeBackgroundColor: () => {},
+      },
+      storage: {
+        local: mockStorage,
+      },
+      identity: {
+        getAuthToken: async () => ({ token: "token-abc" }),
+      },
+    };
+
+    global.fetch = async (url, opts) => {
+      if (url.includes("/drive/v3/files?")) {
+        return { ok: true, json: async () => ({ files: [{ id: "file-xyz-123" }] }) };
+      }
+      if (url.includes("/file-xyz-123?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify({ series: {} }) };
+      }
+      if (opts?.method === "PATCH") {
+        uploadedPayload = JSON.parse(opts.body);
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    handleMessage(
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Chainsaw Man", chapter: "10", url: "https://test.com/ch10" },
+      },
+      {},
+      () => {},
+    );
+
+    await enqueueOperation(async () => {});
+
+    const store = mockStorage.getStore();
+    assert.ok(store.series["Chainsaw Man"], "Series must be saved in storage");
+    assert.equal(store.series["Chainsaw Man"].chapter, "10");
+    assert.equal(store.fileId, "file-xyz-123", "Drive fileId must be cached in storage");
+    assert.ok(store.lastSync, "lastSync timestamp must be updated in storage");
+    assert.equal(uploadedPayload.series["Chainsaw Man"].chapter, "10", "Drive must be patched with new chapter");
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("AM-1 Stale fileId recovery: recovers via findFile/createFile when cached fileId returns 404 from Drive", async () => {
+  const originalFetch = global.fetch;
+  const mockStorage = createMockStorage({
+    fileId: "stale-deleted-fileId",
+    series: {},
+  });
+
+  let findFileCalled = false;
+  let newFileIdUsed = null;
+
+  try {
+    global.chrome = {
+      action: {
+        setBadgeText: () => {},
+        setBadgeBackgroundColor: () => {},
+      },
+      storage: {
+        local: mockStorage,
+      },
+      identity: {
+        getAuthToken: async () => ({ token: "token-recovery" }),
+      },
+    };
+
+    global.fetch = async (url, opts) => {
+      // Stale fileId returns 404
+      if (url.includes("/stale-deleted-fileId?alt=media")) {
+        return { status: 404, ok: false };
+      }
+      // Recovery findFile search
+      if (url.includes("/drive/v3/files?")) {
+        findFileCalled = true;
+        return { ok: true, json: async () => ({ files: [{ id: "new-recovered-fileId" }] }) };
+      }
+      // Fetch new file content
+      if (url.includes("/new-recovered-fileId?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify({ series: {} }) };
+      }
+      // PATCH new file
+      if (opts?.method === "PATCH") {
+        newFileIdUsed = url;
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    handleMessage(
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Solo Leveling", chapter: "200", url: "https://test.com/ch200" },
+      },
+      {},
+      () => {},
+    );
+
+    await enqueueOperation(async () => {});
+
+    assert.equal(findFileCalled, true, "findFile must be called after cached fileId returns 404");
+    assert.ok(newFileIdUsed.includes("new-recovered-fileId"), "PATCH must be issued against recovered fileId");
+    const store = mockStorage.getStore();
+    assert.equal(store.fileId, "new-recovered-fileId", "Updated fileId must replace stale fileId in storage");
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("offline mutation queue: enqueues pending_sync and optimistically updates local series without modifying lastSync", async () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const mockStorage = createMockStorage({
+    series: {
+      "Solo Leveling": { chapter: "50", url: "https://test.com/ch50", updated: "2026-11-20T00:00:00Z" },
+    },
+    lastSync: "2026-11-20T00:00:00Z",
+    pending_sync: [],
+  });
+
+  const badgeCalls = [];
+
+  try {
+    Object.defineProperty(globalThis, "navigator", {
+      value: { onLine: false },
+      configurable: true,
+      writable: true,
+    });
+    global.chrome = {
+      action: {
+        setBadgeText: (arg) => badgeCalls.push(arg),
+        setBadgeBackgroundColor: (arg) => badgeCalls.push(arg),
+      },
+      storage: {
+        local: mockStorage,
+      },
+      identity: {
+        getAuthToken: async () => {
+          throw new Error("Should not be called while offline");
+        },
+      },
+    };
+
+    // 1. SYNC_CHAPTER while offline
+    handleMessage(
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Solo Leveling", chapter: "55", url: "https://test.com/ch55" },
+      },
+      {},
+      () => {},
+    );
+    await enqueueOperation(async () => {});
+
+    let store = mockStorage.getStore();
+    // Optimistic cache update
+    assert.equal(store.series["Solo Leveling"].chapter, "55", "Local cache must be updated optimistically");
+    // lastSync untouched
+    assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated while offline");
+    // Appended to pending_sync
+    assert.equal(store.pending_sync.length, 1);
+    assert.equal(store.pending_sync[0].type, "SYNC_CHAPTER");
+    assert.equal(store.pending_sync[0].payload.chapter, "55");
+    // Badge hygiene: clear badge while offline (never leave stuck '...')
+    assert.equal(badgeCalls.some((c) => c.text === "..."), false, "Must not set in-flight badge while offline");
+
+    // 2. DELETE_SERIES while offline
+    let deleteResponse = null;
+    handleMessage(
+      {
+        type: "DELETE_SERIES",
+        payload: { manga: "Solo Leveling" },
+      },
+      {},
+      (res) => {
+        deleteResponse = res;
+      },
+    );
+    await enqueueOperation(async () => {});
+
+    store = mockStorage.getStore();
+    assert.deepEqual(deleteResponse, { status: "success" });
+    assert.equal(store.series["Solo Leveling"], undefined, "Deleted series must be removed optimistically from cache");
+    assert.equal(store.pending_sync.length, 2);
+    assert.equal(store.pending_sync[1].type, "DELETE_SERIES");
+    assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must remain untouched");
+  } finally {
+    if (originalDescriptor) {
+      Object.defineProperty(globalThis, "navigator", originalDescriptor);
+    } else {
+      delete globalThis.navigator;
+    }
+    delete global.chrome;
+  }
+});
+
+test("FIFO reconciliation: online sync replays pending_sync mutations in FIFO order, patches Drive once, and clears queue", async () => {
+  const originalFetch = global.fetch;
+  const mockStorage = createMockStorage({
+    fileId: "vault-recon-01",
+    series: {
+      "Tower of God": { chapter: "100", url: "https://test.com/ch100" },
+    },
+    pending_sync: [
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Tower of God", chapter: "105", url: "https://test.com/ch105" },
+        timestamp: "2026-11-22T01:00:00Z",
+      },
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "Tower of God", chapter: "110", url: "https://test.com/ch110" },
+        timestamp: "2026-11-22T02:00:00Z",
+      },
+      {
+        type: "DELETE_SERIES",
+        payload: { manga: "Old Series" },
+        timestamp: "2026-11-22T03:00:00Z",
+      },
+    ],
+  });
+
+  let patchedBody = null;
+  let patchCallCount = 0;
+
+  try {
+    global.chrome = {
+      action: {
+        setBadgeText: () => {},
+        setBadgeBackgroundColor: () => {},
+      },
+      storage: {
+        local: mockStorage,
+      },
+      identity: {
+        getAuthToken: async () => ({ token: "token-reconcile" }),
+      },
+    };
+
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-recon-01?alt=media")) {
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              series: {
+                "Tower of God": { chapter: "90", url: "https://test.com/ch90", updated: "2026-11-21T00:00:00Z" },
+                "Old Series": { chapter: "5", url: "https://test.com/old5" },
+              },
+            }),
+        };
+      }
+      if (opts?.method === "PATCH") {
+        patchCallCount++;
+        patchedBody = JSON.parse(opts.body);
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    // Trigger reconciliation via reconcileAndSync
+    const res = await reconcileAndSync({ interactive: false });
+
+    assert.equal(res.status, "success");
+    assert.equal(patchCallCount, 1, "Must write merged vault via single PATCH call");
+
+    // Verify FIFO applied mutations:
+    // Tower of God had Ch. 105 then Ch. 110 -> final must be Ch. 110
+    assert.equal(patchedBody.series["Tower of God"].chapter, "110");
+    // Old Series was deleted -> must be absent from patched body
+    assert.equal(patchedBody.series["Old Series"], undefined);
+
+    // Verify storage was updated and pending_sync queue cleared
+    const store = mockStorage.getStore();
+    assert.equal(store.pending_sync.length, 0, "pending_sync items must be cleared after reconciliation");
+    assert.equal(store.series["Tower of God"].chapter, "110");
+    assert.equal(store.series["Old Series"], undefined);
+    assert.ok(store.lastSync, "lastSync must be updated upon successful reconciliation");
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("reconciliation failure retention: pending_sync is preserved when Drive fetch/write fails or Drive JSON is malformed (BUG-001)", async () => {
+  const originalFetch = global.fetch;
+  const initialPending = [
+    {
+      type: "SYNC_CHAPTER",
+      payload: { manga: "Chainsaw Man", chapter: "99", url: "https://test.com/ch99" },
+      timestamp: "2026-11-22T00:00:00Z",
+    },
+  ];
+
+  const mockStorage = createMockStorage({
+    fileId: "vault-malformed-01",
+    series: {},
+    pending_sync: [...initialPending],
+  });
+
+  try {
+    global.chrome = {
+      action: {
+        setBadgeText: () => {},
+        setBadgeBackgroundColor: () => {},
+      },
+      storage: {
+        local: mockStorage,
+      },
+      identity: {
+        getAuthToken: async () => ({ token: "token-bad" }),
+      },
+    };
+
+    // Drive returns corrupted non-empty JSON
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-malformed-01?alt=media")) {
+        return { ok: true, text: async () => "{ invalid-json" };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const res = await reconcileAndSync({ interactive: false });
+
+    assert.equal(res.status, "malformed", "Must abort with malformed status per BUG-001");
+    const store = mockStorage.getStore();
+    assert.equal(store.pending_sync.length, 1, "pending_sync must be retained on malformed Drive JSON");
+    assert.equal(store.pending_sync[0].payload.manga, "Chainsaw Man");
   } finally {
     delete global.chrome;
     global.fetch = originalFetch;

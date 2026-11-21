@@ -8,7 +8,19 @@ const {
   isValidChapter,
   clearAllTimers,
   checkPage,
+  init,
+  getScrollDepth,
+  isScrollDepthSatisfied,
+  maybeDispatchSync,
+  onScroll,
+  onUrlChange,
+  handleRouteChange,
   getActiveRetryTimer,
+  getActiveRouteChangeTimer,
+  getDwellSatisfied,
+  getDispatchedForUrl,
+  getDetectedChapterPayload,
+  resetState,
 } = require("../content.js");
 
 test("isValidTitle: checks for non-empty string", () => {
@@ -302,7 +314,7 @@ test("checkPage: retries up to 8 times when title or chapter is missing and stop
   }
 });
 
-test("checkPage: initiates 3s sync debounce when both title and chapter (including chapter 0) are valid", () => {
+test("checkPage: initiates 15s sync debounce when both title and chapter (including chapter 0) are valid", () => {
   const originalSetTimeout = global.setTimeout;
   const originalClearTimeout = global.clearTimeout;
 
@@ -343,7 +355,7 @@ test("checkPage: initiates 3s sync debounce when both title and chapter (includi
 
     checkPage(0);
 
-    assert.equal(syncTimerDelay, 3000, "Must schedule 3s debounce timer");
+    assert.equal(syncTimerDelay, 15000, "Must schedule 15s debounce timer");
     assert.equal(global.window.sanctumTimer, 101, "sanctumTimer must be set on window");
     assert.equal(sentMessages.length, 0, "Should not send message before debounce timer fires");
 
@@ -434,5 +446,269 @@ test("clearAllTimers: clears sanctumTimer without errors", () => {
   } finally {
     global.clearTimeout = originalClearTimeout;
     delete global.window;
+  }
+});
+
+test("scroll depth: evaluates <=25%, >25%, and non-scrollable single-viewport edge cases", () => {
+  try {
+    // 1. Non-scrollable page (scrollHeight <= viewportHeight) evaluates as 1.0 (satisfied)
+    global.window = { innerHeight: 800, scrollY: 0 };
+    global.document = {
+      documentElement: { scrollHeight: 800, clientHeight: 800, scrollTop: 0 },
+      body: { scrollHeight: 800, scrollTop: 0 },
+    };
+    assert.equal(getScrollDepth(), 1.0, "Non-scrollable page must evaluate to 1.0");
+    assert.equal(isScrollDepthSatisfied(), true, "Non-scrollable page must be satisfied");
+
+    // 2. Scrollable page (scrollHeight = 2000, viewport = 1000, scrollableHeight = 1000)
+    // At scrollTop = 200: depth = 0.20 (<= 0.25 -> not satisfied)
+    global.window = { innerHeight: 1000, scrollY: 200 };
+    global.document = {
+      documentElement: { scrollHeight: 2000, clientHeight: 1000, scrollTop: 200 },
+      body: { scrollHeight: 2000, scrollTop: 200 },
+    };
+    assert.equal(getScrollDepth(), 0.2, "200/1000 must evaluate to 0.20");
+    assert.equal(isScrollDepthSatisfied(), false, "0.20 must not satisfy > 0.25 gate");
+
+    // At scrollTop = 250: depth = 0.25 (boundary case: strictly > 0.25 is required -> not satisfied)
+    global.window.scrollY = 250;
+    global.document.documentElement.scrollTop = 250;
+    assert.equal(getScrollDepth(), 0.25, "250/1000 must evaluate to 0.25");
+    assert.equal(isScrollDepthSatisfied(), false, "Boundary 0.25 must not satisfy > 0.25 gate");
+
+    // At scrollTop = 260: depth = 0.26 (> 0.25 -> satisfied)
+    global.window.scrollY = 260;
+    global.document.documentElement.scrollTop = 260;
+    assert.equal(getScrollDepth(), 0.26, "260/1000 must evaluate to 0.26");
+    assert.equal(isScrollDepthSatisfied(), true, "0.26 must satisfy > 0.25 gate");
+  } finally {
+    delete global.window;
+    delete global.document;
+  }
+});
+
+test("scroll/dwell convergence: 15s dwell with scroll <= 25% withholds dispatch until scroll > 25%, and dispatches once", () => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+
+  try {
+    resetState();
+    let dwellTimerCb = null;
+
+    global.setTimeout = (cb, delay) => {
+      if (delay === 15000) {
+        dwellTimerCb = cb;
+        return 555;
+      }
+      return 1;
+    };
+    global.clearTimeout = () => {};
+
+    const sentMessages = [];
+    global.chrome = {
+      runtime: {
+        sendMessage: (msg) => sentMessages.push(msg),
+      },
+    };
+
+    // Scrollable page, user currently at scrollTop = 0 (0% depth)
+    global.window = {
+      innerHeight: 1000,
+      scrollY: 0,
+      location: {
+        hostname: "mangadex.org",
+        href: "https://mangadex.org/chapter/chapter-convergence-test",
+        pathname: "/chapter/chapter-convergence-test",
+      },
+      sanctumTimer: null,
+    };
+    global.document = {
+      documentElement: { scrollHeight: 2000, clientHeight: 1000, scrollTop: 0 },
+      body: { scrollHeight: 2000, scrollTop: 0 },
+      querySelector: (selector) => {
+        if (selector === "a.reader--header-manga") return { innerText: "Tower of God" };
+        if (selector === "div.reader--meta.chapter") return { innerText: "Chapter 50" };
+        return null;
+      },
+    };
+
+    // 1. Detect page: schedules 15s timer
+    checkPage(0);
+    assert.ok(dwellTimerCb, "15s dwell timer callback must be scheduled");
+    assert.equal(sentMessages.length, 0, "Must not dispatch before dwell timer fires");
+
+    // 2. 15s timer fires while user is still at scrollTop = 0 (<= 25%)
+    dwellTimerCb();
+    assert.equal(getDwellSatisfied(), true, "Dwell must now be marked satisfied");
+    assert.equal(sentMessages.length, 0, "Must NOT dispatch if scroll depth is <= 25% when dwell fires");
+
+    // 3. User scrolls to 20% (still <= 25%)
+    global.window.scrollY = 200;
+    global.document.documentElement.scrollTop = 200;
+    onScroll();
+    assert.equal(sentMessages.length, 0, "Must NOT dispatch at 20% scroll depth");
+
+    // 4. User scrolls past 25% to 40% (400px)
+    global.window.scrollY = 400;
+    global.document.documentElement.scrollTop = 400;
+    onScroll();
+    assert.equal(sentMessages.length, 1, "Must dispatch SYNC_CHAPTER once user scrolls > 25%");
+    assert.deepEqual(sentMessages[0], {
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "Tower of God",
+        chapter: "50",
+        url: "https://mangadex.org/chapter/chapter-convergence-test",
+        site: "mangadex.org",
+      },
+    });
+
+    // 5. Subsequent scrolling on same URL must NOT dispatch duplicate messages
+    global.window.scrollY = 800;
+    global.document.documentElement.scrollTop = 800;
+    onScroll();
+    assert.equal(sentMessages.length, 1, "Must NOT dispatch duplicate messages on subsequent scrolls");
+  } finally {
+    resetState();
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    delete global.window;
+    delete global.document;
+    delete global.chrome;
+  }
+});
+
+test("route change: early scroll with route departure before 15s cancels timer and never dispatches", () => {
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+
+  try {
+    resetState();
+    let dwellTimerId = null;
+    let cancelledTimerId = null;
+
+    global.setTimeout = (cb, delay) => {
+      if (delay === 15000) {
+        dwellTimerId = 777;
+        return dwellTimerId;
+      }
+      return 1;
+    };
+    global.clearTimeout = (id) => {
+      cancelledTimerId = id;
+    };
+
+    const sentMessages = [];
+    global.chrome = {
+      runtime: {
+        sendMessage: (msg) => sentMessages.push(msg),
+      },
+    };
+
+    // User is on Chapter 1 and immediately scrolls > 25%
+    global.window = {
+      innerHeight: 1000,
+      scrollY: 500, // 50% scroll depth
+      location: {
+        hostname: "mangadex.org",
+        href: "https://mangadex.org/chapter/chapter-early-leave-1",
+        pathname: "/chapter/chapter-early-leave-1",
+      },
+      sanctumTimer: null,
+    };
+    global.document = {
+      documentElement: { scrollHeight: 2000, clientHeight: 1000, scrollTop: 500 },
+      body: { scrollHeight: 2000, scrollTop: 500 },
+      querySelector: (selector) => {
+        if (selector === "a.reader--header-manga") return { innerText: "Omniscient Reader" };
+        if (selector === "div.reader--meta.chapter") return { innerText: "Chapter 1" };
+        return null;
+      },
+    };
+
+    checkPage(0);
+    assert.equal(global.window.sanctumTimer, 777, "Timer must be active");
+    assert.equal(sentMessages.length, 0, "Must not dispatch before 15s");
+
+    // User navigates away to Chapter 2 before 15s expires
+    global.window.location.href = "https://mangadex.org/chapter/chapter-early-leave-2";
+    global.window.location.pathname = "/chapter/chapter-early-leave-2";
+    onUrlChange();
+
+    assert.equal(cancelledTimerId, 777, "15s dwell timer must be cancelled on route change");
+    assert.equal(getDwellSatisfied(), false, "Dwell satisfied must be reset to false");
+    assert.equal(sentMessages.length, 0, "SYNC_CHAPTER must never have been dispatched");
+  } finally {
+    resetState();
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+    delete global.window;
+    delete global.document;
+    delete global.chrome;
+  }
+});
+
+test("init: does NOT observe document with MutationObserver and wires window.navigation with fallbacks", () => {
+  let mutationObserverInstantiated = false;
+  let navigationListeners = {};
+  let windowListeners = {};
+
+  const originalMutationObserver = global.MutationObserver;
+
+  try {
+    resetState();
+
+    global.MutationObserver = class MockMutationObserver {
+      constructor() {
+        mutationObserverInstantiated = true;
+      }
+      observe() {
+        mutationObserverInstantiated = true;
+      }
+      disconnect() {}
+    };
+
+    global.window = {
+      location: {
+        hostname: "asuracomic.net",
+        href: "https://asuracomic.net/series/solo-leveling/chapter/1",
+        pathname: "/series/solo-leveling/chapter/1",
+      },
+      navigation: {
+        addEventListener: (event, handler) => {
+          navigationListeners[event] = handler;
+        },
+      },
+      addEventListener: (event, handler) => {
+        windowListeners[event] = handler;
+      },
+    };
+
+    global.document = {
+      querySelector: () => null,
+    };
+
+    init();
+
+    // Verify AC-12: Zero MutationObserver usage on document
+    assert.equal(
+      mutationObserverInstantiated,
+      false,
+      "init() must NOT instantiate or observe MutationObserver on document",
+    );
+
+    // Verify AC-13: window.navigation API event listeners
+    assert.equal(typeof navigationListeners["navigatesuccess"], "function", "Must listen to navigatesuccess");
+    assert.equal(typeof navigationListeners["currententrychange"], "function", "Must listen to currententrychange");
+
+    // Verify AC-13: fallback window event listeners
+    assert.equal(typeof windowListeners["popstate"], "function", "Must listen to popstate");
+    assert.equal(typeof windowListeners["hashchange"], "function", "Must listen to hashchange");
+    assert.equal(typeof windowListeners["scroll"], "function", "Must listen to scroll");
+  } finally {
+    resetState();
+    global.MutationObserver = originalMutationObserver;
+    delete global.window;
+    delete global.document;
   }
 });
