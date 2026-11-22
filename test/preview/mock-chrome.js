@@ -11,16 +11,26 @@
     MOCK_DATASETS[activeScenario] || MOCK_DATASETS.default
   ));
 
+  let mockStorage = {
+    series: JSON.parse(JSON.stringify(currentVault.series || {})),
+    fileId: "mock-sanctum-file-id-001",
+    lastSync: new Date().toISOString(),
+    pending_sync: [],
+  };
+
   window.__MOCK_STATE__ = {
     get scenario() { return activeScenario; },
     set scenario(s) {
       activeScenario = s;
       sessionStorage.setItem("sanctum_scenario", s);
       currentVault = JSON.parse(JSON.stringify(MOCK_DATASETS[s] || MOCK_DATASETS.default));
+      mockStorage.series = JSON.parse(JSON.stringify(currentVault.series || {}));
     },
     get vault() { return currentVault; },
+    get storage() { return mockStorage; },
     reset() {
       currentVault = JSON.parse(JSON.stringify(MOCK_DATASETS[activeScenario] || MOCK_DATASETS.default));
+      mockStorage.series = JSON.parse(JSON.stringify(currentVault.series || {}));
     }
   };
 
@@ -35,6 +45,53 @@
         return { token: "mock-google-oauth-token-12345" };
       }
     },
+    storage: {
+      local: {
+        get: (keys, callback) => {
+          console.log("[Sanctum Preview] chrome.storage.local.get:", keys);
+          let result = {};
+          if (typeof keys === "string") {
+            result[keys] = mockStorage[keys];
+          } else if (Array.isArray(keys)) {
+            keys.forEach((k) => {
+              result[k] = mockStorage[k];
+            });
+          } else if (keys && typeof keys === "object") {
+            Object.keys(keys).forEach((k) => {
+              result[k] = mockStorage[k] !== undefined ? mockStorage[k] : keys[k];
+            });
+          } else {
+            result = { ...mockStorage };
+          }
+          if (typeof callback === "function") {
+            callback(result);
+          }
+          return Promise.resolve(result);
+        },
+        set: (items, callback) => {
+          console.log("[Sanctum Preview] chrome.storage.local.set:", items);
+          Object.assign(mockStorage, items);
+          if (items.series) {
+            currentVault.series = JSON.parse(JSON.stringify(items.series));
+          }
+          if (typeof callback === "function") {
+            callback();
+          }
+          return Promise.resolve();
+        },
+        remove: (keys, callback) => {
+          const arr = Array.isArray(keys) ? keys : [keys];
+          arr.forEach((k) => delete mockStorage[k]);
+          if (typeof callback === "function") callback();
+          return Promise.resolve();
+        },
+        clear: (callback) => {
+          mockStorage = {};
+          if (typeof callback === "function") callback();
+          return Promise.resolve();
+        },
+      },
+    },
     runtime: {
       sendMessage: (message, callback) => {
         console.log("[Sanctum Preview] chrome.runtime.sendMessage:", message);
@@ -42,10 +99,27 @@
           const mangaName = message.payload?.manga;
           if (mangaName && currentVault.series[mangaName]) {
             delete currentVault.series[mangaName];
+            delete mockStorage.series[mangaName];
             console.log(`[Sanctum Preview] Deleted "${mangaName}" from mock vault.`);
           }
           if (typeof callback === "function") {
             setTimeout(() => callback({ status: "success" }), 100);
+          }
+        } else if (message && message.type === "SYNC_VAULT") {
+          if (activeScenario === "error") {
+            if (typeof callback === "function") {
+              setTimeout(() => callback({ status: "error", error: "Simulated preview sync error" }), 100);
+            }
+          } else {
+            mockStorage.series = JSON.parse(JSON.stringify(currentVault.series || {}));
+            mockStorage.lastSync = new Date().toISOString();
+            if (typeof callback === "function") {
+              setTimeout(() => callback({
+                status: "success",
+                series: mockStorage.series,
+                lastSync: mockStorage.lastSync,
+              }), 100);
+            }
           }
         }
       }

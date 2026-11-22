@@ -16,6 +16,13 @@ function clearBadgeTimer() {
   }
 }
 
+function clearBadge() {
+  clearBadgeTimer();
+  if (typeof chrome !== "undefined" && chrome.action) {
+    chrome.action.setBadgeText({ text: "" });
+  }
+}
+
 function setErrorBadge() {
   clearBadgeTimer();
   if (typeof chrome !== "undefined" && chrome.action) {
@@ -44,6 +51,104 @@ function setSuccessBadge() {
       }
     }, 3000);
   }
+}
+
+// Storage helpers
+async function getStorage(keys) {
+  if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+    return {};
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.get(keys, (result) => {
+      resolve(result || {});
+    });
+  });
+}
+
+async function setStorage(items) {
+  if (typeof chrome === "undefined" || !chrome.storage || !chrome.storage.local) {
+    return;
+  }
+  return new Promise((resolve) => {
+    chrome.storage.local.set(items, () => {
+      resolve();
+    });
+  });
+}
+
+function isValidMangaName(name) {
+  if (typeof name !== "string") return false;
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed === "__proto__" || trimmed === "constructor" || trimmed === "prototype") {
+    return false;
+  }
+  return true;
+}
+
+// Chapter parsing and monotonic progress guard
+function parseChapter(chapter) {
+  if (chapter === null || chapter === undefined) return null;
+  if (typeof chapter === "number") {
+    return Number.isFinite(chapter) ? { type: "numeric", value: [chapter] } : null;
+  }
+  if (typeof chapter !== "string") return null;
+  const trimmed = chapter.trim();
+  if (!trimmed) return null;
+
+  // Fractional / hyphenated chapters e.g. "12-1", "12-1-3", "150-5"
+  if (/^\d+(?:-\d+)+$/.test(trimmed)) {
+    const parts = trimmed.split("-").map((p) => parseInt(p, 10));
+    return { type: "fractional", value: parts };
+  }
+
+  // Standard numeric (integer or decimal) e.g. "100", "150.5", "0.5"
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return { type: "numeric", value: [parseFloat(trimmed)] };
+  }
+
+  return null;
+}
+
+function compareChapterParts(newParts, savedParts) {
+  const len = Math.max(newParts.length, savedParts.length);
+  for (let i = 0; i < len; i++) {
+    const a = i < newParts.length ? newParts[i] : 0;
+    const b = i < savedParts.length ? savedParts[i] : 0;
+    if (a < b) return -1;
+    if (a > b) return 1;
+  }
+  return 0;
+}
+
+function shouldUpdateProgress(newChapter, newTimestamp, savedChapter, savedTimestamp) {
+  if (savedChapter === undefined || savedChapter === null) {
+    return true;
+  }
+
+  const parsedNew = parseChapter(newChapter);
+  const parsedSaved = parseChapter(savedChapter);
+
+  // Both chapters have numeric/fractional structure: enforce monotonic progress
+  if (parsedNew && parsedSaved) {
+    const comp = compareChapterParts(parsedNew.value, parsedSaved.value);
+    // Reject if new < saved
+    if (comp < 0) {
+      return false;
+    }
+    return true;
+  }
+
+  // Fallback to timestamp comparison when either chapter is non-numeric
+  if (newTimestamp && savedTimestamp) {
+    const newTime = new Date(newTimestamp).getTime();
+    const savedTime = new Date(savedTimestamp).getTime();
+    if (!Number.isNaN(newTime) && !Number.isNaN(savedTime)) {
+      return newTime >= savedTime;
+    }
+  }
+
+  return true;
 }
 
 async function findFile(token) {
@@ -106,221 +211,457 @@ async function createFile(token) {
   return file.id;
 }
 
+async function fetchAndValidateDriveVault(fileId, token) {
+  try {
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    if (response.status === 404) {
+      return { status: "not_found", data: { series: {} } };
+    }
+
+    if (!response.ok) {
+      return {
+        status: "error",
+        error: new Error(`Drive fetch failed with status ${response.status}`),
+      };
+    }
+
+    const text = await response.text();
+    if (!text.trim()) {
+      return { status: "ok", data: { series: {} } };
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        console.warn(
+          "⚠️ [Sanctum] Drive file is not a valid JSON object, aborting write to prevent data loss:",
+          text,
+        );
+        return { status: "malformed", text };
+      }
+      if (!parsed.series || typeof parsed.series !== "object" || Array.isArray(parsed.series)) {
+        parsed.series = {};
+      }
+      return { status: "ok", data: parsed };
+    } catch (parseErr) {
+      console.warn(
+        "⚠️ [Sanctum] Drive file JSON malformed, aborting write to prevent data loss:",
+        parseErr,
+      );
+      return { status: "malformed", error: parseErr };
+    }
+  } catch (netErr) {
+    console.error("❌ [Sanctum] Drive fetch network error:", netErr);
+    return { status: "error", error: netErr };
+  }
+}
+
+async function uploadDriveVault(fileId, token, data) {
+  const patchRes = await fetch(
+    `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
+    {
+      method: "PATCH",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    },
+  );
+
+  if (!patchRes.ok) {
+    throw new Error(`Drive patch failed with status ${patchRes.status}`);
+  }
+  return patchRes;
+}
+
+// Reconciles pending mutations against Google Drive and writes back changes
+async function reconcileAndSync(opts = {}) {
+  try {
+    const { liveMutation, interactive = false } = opts;
+
+    let tokenObj;
+    try {
+      tokenObj = await chrome.identity.getAuthToken({ interactive });
+    } catch (authErr) {
+      console.error("❌ [Sanctum] Auth failed:", authErr);
+      setErrorBadge();
+      return { status: "error", error: authErr };
+    }
+
+    const token = tokenObj?.token;
+    if (!token) {
+      console.error("❌ [Sanctum] No auth token received");
+      setErrorBadge();
+      return { status: "error", error: new Error("No auth token received") };
+    }
+
+    const storage = await getStorage(["series", "fileId", "lastSync", "pending_sync"]);
+    let fileId = storage.fileId;
+    let vaultResult = null;
+
+    // 1. Try cached fileId if available
+    if (fileId) {
+      vaultResult = await fetchAndValidateDriveVault(fileId, token);
+      if (vaultResult.status === "not_found") {
+        // Stale cached fileId (AM-1): recover via findFile / createFile
+        console.warn("⚠️ [Sanctum] Cached fileId returned 404, recovering via findFile/createFile...");
+        fileId = null;
+        await setStorage({ fileId: null });
+      }
+    }
+
+    // 2. Fall back to findFile / createFile if no valid fileId
+    if (!fileId) {
+      const searchResult = await findFile(token);
+      if (searchResult.status === "found") {
+        fileId = searchResult.fileId;
+        vaultResult = await fetchAndValidateDriveVault(fileId, token);
+      } else if (searchResult.status === "not_found") {
+        if (liveMutation && liveMutation.type === "DELETE_SERIES" && (!storage.pending_sync || storage.pending_sync.length === 0)) {
+          return { status: "not_found", series: {} };
+        }
+        try {
+          fileId = await createFile(token);
+          vaultResult = { status: "ok", data: { series: {} } };
+        } catch (createErr) {
+          console.error("❌ [Sanctum] createFile error:", createErr);
+          setErrorBadge();
+          return { status: "error", error: createErr };
+        }
+      } else {
+        console.error("❌ [Sanctum] findFile error:", searchResult.error);
+        setErrorBadge();
+        return { status: "error", error: searchResult.error };
+      }
+    }
+
+    // 3. Check vault content validation result (BUG-001)
+    if (vaultResult.status === "malformed") {
+      setErrorBadge();
+      return { status: "malformed", error: vaultResult.error || new Error("Malformed Drive JSON") };
+    }
+    if (vaultResult.status === "error") {
+      setErrorBadge();
+      return { status: "error", error: vaultResult.error };
+    }
+
+    const remoteVault = vaultResult.data || { series: {} };
+    if (!remoteVault.series || typeof remoteVault.series !== "object" || Array.isArray(remoteVault.series)) {
+      remoteVault.series = {};
+    }
+
+    // 4. Gather pending mutations to reconcile
+    const pendingQueue = Array.isArray(storage.pending_sync) ? [...storage.pending_sync] : [];
+    const snapshotCount = pendingQueue.length;
+
+    if (liveMutation) {
+      pendingQueue.push(liveMutation);
+    }
+
+    // If there are no pending mutations and no live mutation, we just refreshed from Drive
+    if (pendingQueue.length === 0) {
+      const nowIso = new Date().toISOString();
+      await setStorage({
+        series: remoteVault.series,
+        fileId: fileId,
+        lastSync: nowIso,
+      });
+      return { status: "success", series: remoteVault.series, lastSync: nowIso, fileId };
+    }
+
+    // Apply mutations in FIFO order
+    for (const mut of pendingQueue) {
+      if (!mut || !mut.type) continue;
+      if (mut.type === "SYNC_CHAPTER") {
+        const mName = typeof mut.payload?.manga === "string" ? mut.payload.manga.trim() : null;
+        const mChapter = mut.payload?.chapter;
+        const mUrl = mut.payload?.url;
+        const mTime = mut.timestamp || new Date().toISOString();
+        if (isValidMangaName(mName)) {
+          const saved = Object.hasOwn(remoteVault.series, mName) ? remoteVault.series[mName] : undefined;
+          if (!saved || shouldUpdateProgress(mChapter, mTime, saved.chapter, saved.updated)) {
+            remoteVault.series[mName] = {
+              chapter: mChapter,
+              url: mUrl,
+              updated: mTime,
+            };
+          } else {
+            console.log(`[Sanctum] Reconciliation monotonic guard skipped ${mName} Ch. ${mChapter}`);
+          }
+        }
+      } else if (mut.type === "DELETE_SERIES") {
+        const mName = typeof mut.payload?.manga === "string" ? mut.payload.manga.trim() : null;
+        if (isValidMangaName(mName) && remoteVault.series) {
+          if (Object.hasOwn(remoteVault.series, mName)) {
+            delete remoteVault.series[mName];
+          }
+        }
+      }
+    }
+
+    // 5. Upload merged vault back to Drive
+    try {
+      await uploadDriveVault(fileId, token, remoteVault);
+    } catch (uploadErr) {
+      console.error("❌ [Sanctum] uploadDriveVault error:", uploadErr);
+      setErrorBadge();
+      return { status: "error", error: uploadErr };
+    }
+
+    // 6. Update local storage and remove the reconciled prefix
+    const nowIso = new Date().toISOString();
+    const freshStorage = await getStorage(["pending_sync"]);
+    const currentPending = Array.isArray(freshStorage.pending_sync) ? freshStorage.pending_sync : [];
+    const remainingPending = currentPending.slice(snapshotCount);
+
+    await setStorage({
+      series: remoteVault.series,
+      fileId: fileId,
+      lastSync: nowIso,
+      pending_sync: remainingPending,
+    });
+
+    setSuccessBadge();
+    return {
+      status: "success",
+      series: remoteVault.series,
+      lastSync: nowIso,
+      fileId: fileId,
+    };
+  } catch (unexpectedErr) {
+    console.error("❌ [Sanctum] reconcileAndSync unexpected error:", unexpectedErr);
+    setErrorBadge();
+    return { status: "error", error: unexpectedErr };
+  }
+}
+
 function handleMessage(message, sender, sendResponse) {
+  if (!message || typeof message !== "object") return;
+
   if (message.type === "SYNC_CHAPTER") {
     enqueueOperation(async () => {
       try {
-        setInFlightBadge();
-
-        let tokenObj;
-        try {
-          tokenObj = await chrome.identity.getAuthToken({
-            interactive: false,
-          });
-        } catch (authErr) {
-          console.error("❌ [Sanctum] Silent auth failed:", authErr);
-          setErrorBadge();
-          return;
-        }
-
-        const token = tokenObj?.token;
-        if (!token) {
-          console.error("❌ [Sanctum] No auth token received");
-          setErrorBadge();
-          return;
-        }
-
-        const searchResult = await findFile(token);
-        let fileId;
-        if (searchResult.status === "found") {
-          fileId = searchResult.fileId;
-        } else if (searchResult.status === "not_found") {
-          fileId = await createFile(token);
-        } else {
-          console.error("❌ [Sanctum] findFile error:", searchResult.error);
-          setErrorBadge();
-          return;
-        }
-
-        // Fetch and parse content safely
-        const response = await fetch(
-          `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-          {
-            headers: { Authorization: `Bearer ${token}` },
-          },
-        );
-
-        let data;
-        if (response.ok) {
-          const text = await response.text();
-          if (!text.trim()) {
-            data = { series: {} };
-          } else {
-            try {
-              const parsed = JSON.parse(text);
-              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                console.warn(
-                  "⚠️ [Sanctum] Drive file is not a valid JSON object, aborting write to prevent data loss:",
-                  text,
-                );
-                setErrorBadge();
-                return;
-              }
-              data = parsed;
-            } catch (parseErr) {
-              console.warn(
-                "⚠️ [Sanctum] Drive file JSON malformed, aborting write to prevent data loss:",
-                parseErr,
-              );
-              setErrorBadge();
-              return;
-            }
+        const rawManga = message.payload?.manga;
+        if (!isValidMangaName(rawManga)) {
+          console.warn("[Sanctum] SYNC_CHAPTER rejected: invalid mangaName", rawManga);
+          if (typeof sendResponse === "function") {
+            sendResponse({ status: "ignored", reason: "invalid_manga_name" });
           }
-        } else if (response.status !== 404) {
-          throw new Error(`Drive fetch failed with status ${response.status}`);
-        } else {
-          data = { series: {} };
+          return;
         }
 
-        if (!data.series || typeof data.series !== "object" || Array.isArray(data.series)) {
-          data.series = {};
+        const mangaName = rawManga.trim();
+        const newChapter = message.payload?.chapter;
+        const newUrl = message.payload?.url;
+        const nowIso = new Date().toISOString();
+
+        const storage = await getStorage(["series", "pending_sync"]);
+        const localSeries =
+          storage.series && typeof storage.series === "object" && !Array.isArray(storage.series)
+            ? { ...storage.series }
+            : {};
+
+        // 1. Monotonic guard check against current cached local series entry
+        const savedEntry = Object.hasOwn(localSeries, mangaName) ? localSeries[mangaName] : undefined;
+        if (savedEntry) {
+          const allowed = shouldUpdateProgress(newChapter, nowIso, savedEntry.chapter, savedEntry.updated);
+          if (!allowed) {
+            console.log(
+              `[Sanctum] Monotonic guard rejected: ${mangaName} Ch. ${newChapter} < current Ch. ${savedEntry.chapter}`,
+            );
+            if (typeof sendResponse === "function") {
+              sendResponse({ status: "ignored", reason: "monotonic_downgrade" });
+            }
+            return;
+          }
         }
 
-        // Update entry
-        data.series[message.payload.manga] = {
-          chapter: message.payload.chapter,
-          url: message.payload.url,
-          updated: new Date().toISOString(),
+        // 2. Optimistic local cache update
+        localSeries[mangaName] = {
+          chapter: newChapter,
+          url: newUrl,
+          updated: nowIso,
+        };
+        await setStorage({ series: localSeries });
+
+        const liveMutation = {
+          type: "SYNC_CHAPTER",
+          payload: {
+            manga: mangaName,
+            chapter: newChapter,
+            url: newUrl,
+            site: message.payload?.site,
+          },
+          timestamp: nowIso,
         };
 
-        // Upload back to Drive
-        const patchRes = await fetch(
-          `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-          {
-            method: "PATCH",
-            headers: { Authorization: `Bearer ${token}` },
-            body: JSON.stringify(data),
-          },
-        );
-
-        if (!patchRes.ok) {
-          throw new Error(`Drive patch failed with status ${patchRes.status}`);
+        // 3. Offline check
+        const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+        if (isOffline) {
+          const freshStorage = await getStorage(["pending_sync"]);
+          const q = Array.isArray(freshStorage.pending_sync) ? [...freshStorage.pending_sync] : [];
+          q.push(liveMutation);
+          await setStorage({ pending_sync: q });
+          clearBadge();
+          if (typeof sendResponse === "function") {
+            sendResponse({ status: "queued_offline" });
+          }
+          return;
         }
 
-        console.log("✅ [Sanctum] Vault Updated:", message.payload.manga);
-        setSuccessBadge();
+        // 4. Online sync
+        setInFlightBadge();
+        const syncResult = await reconcileAndSync({ liveMutation, interactive: false });
+        if (syncResult.status !== "success") {
+          const freshStorage = await getStorage(["pending_sync"]);
+          const q = Array.isArray(freshStorage.pending_sync) ? [...freshStorage.pending_sync] : [];
+          q.push(liveMutation);
+          await setStorage({ pending_sync: q });
+        }
       } catch (err) {
         console.error("❌ [Sanctum] Sync Failed:", err.message);
         setErrorBadge();
       }
     });
-    // Do not return true: SYNC_CHAPTER is fire-and-forget and does not call sendResponse
+    // Fire-and-forget; do not return true
     return;
   }
 
   if (message.type === "DELETE_SERIES") {
     enqueueOperation(async () => {
       try {
-        let tokenObj;
-        try {
-          tokenObj = await chrome.identity.getAuthToken({
-            interactive: false,
-          });
-        } catch (authErr) {
-          console.error("[Sanctum] Delete Auth Failed:", authErr);
-          setErrorBadge();
-          sendResponse({ status: "error" });
+        const rawManga = message.payload?.manga;
+        if (!isValidMangaName(rawManga)) {
+          console.warn("[Sanctum] DELETE_SERIES rejected: invalid mangaName", rawManga);
+          if (typeof sendResponse === "function") {
+            sendResponse({ status: "error", error: "Invalid manga name" });
+          }
           return;
         }
 
-        const token = tokenObj?.token;
-        if (!token) {
-          setErrorBadge();
-          sendResponse({ status: "error" });
+        const mangaName = rawManga.trim();
+        const nowIso = new Date().toISOString();
+
+        // 1. Optimistic local cache delete
+        const storage = await getStorage(["series", "pending_sync"]);
+        const localSeries =
+          storage.series && typeof storage.series === "object" && !Array.isArray(storage.series)
+            ? { ...storage.series }
+            : {};
+        if (Object.hasOwn(localSeries, mangaName)) {
+          delete localSeries[mangaName];
+          await setStorage({ series: localSeries });
+        }
+
+        const liveMutation = {
+          type: "DELETE_SERIES",
+          payload: { manga: mangaName },
+          timestamp: nowIso,
+        };
+
+        // 2. Offline check
+        const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+        if (isOffline) {
+          const freshStorage = await getStorage(["pending_sync"]);
+          const q = Array.isArray(freshStorage.pending_sync) ? [...freshStorage.pending_sync] : [];
+          q.push(liveMutation);
+          await setStorage({ pending_sync: q });
+          clearBadge();
+          sendResponse({ status: "success" });
           return;
         }
 
-        const searchResult = await findFile(token);
-        if (searchResult.status === "error") {
-          console.error("[Sanctum] Delete findFile error:", searchResult.error);
-          setErrorBadge();
-          sendResponse({ status: "error" });
-          return;
+        // 3. Online sync
+        const syncResult = await reconcileAndSync({ liveMutation, interactive: false });
+        if (syncResult.status === "success" || syncResult.status === "not_found") {
+          clearBadge();
+          sendResponse({ status: "success" });
+        } else {
+          const freshStorage = await getStorage(["pending_sync"]);
+          const q = Array.isArray(freshStorage.pending_sync) ? [...freshStorage.pending_sync] : [];
+          q.push(liveMutation);
+          await setStorage({ pending_sync: q });
+          sendResponse({ status: "queued" });
         }
-
-        if (searchResult.status === "found") {
-          const fileId = searchResult.fileId;
-          const response = await fetch(
-            `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`,
-            {
-              headers: { Authorization: `Bearer ${token}` },
-            },
-          );
-
-          if (!response.ok) {
-            throw new Error(`Drive fetch failed with status ${response.status}`);
-          }
-
-          let data;
-          const text = await response.text();
-          if (!text.trim()) {
-            data = { series: {} };
-          } else {
-            try {
-              const parsed = JSON.parse(text);
-              if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                console.warn(
-                  "⚠️ [Sanctum] Delete: Drive file JSON is not a valid object, aborting:",
-                  text,
-                );
-                setErrorBadge();
-                sendResponse({ status: "error" });
-                return;
-              }
-              data = parsed;
-            } catch (parseErr) {
-              console.warn(
-                "⚠️ [Sanctum] Delete: Drive file JSON malformed, aborting:",
-                parseErr,
-              );
-              setErrorBadge();
-              sendResponse({ status: "error" });
-              return;
-            }
-          }
-
-          if (data && data.series && typeof data.series === "object" && !Array.isArray(data.series)) {
-            delete data.series[message.payload.manga];
-          }
-
-          const patchRes = await fetch(
-            `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
-            {
-              method: "PATCH",
-              headers: { Authorization: `Bearer ${token}` },
-              body: JSON.stringify(data),
-            },
-          );
-
-          if (!patchRes.ok) {
-            throw new Error(`Drive patch failed with status ${patchRes.status}`);
-          }
-        }
-
-        setSuccessBadge();
-        sendResponse({ status: "success" });
       } catch (err) {
         console.error("[Sanctum] Delete Failed:", err);
         setErrorBadge();
-        sendResponse({ status: "error" });
+        sendResponse({ status: "error", error: err?.message || String(err) });
       }
     });
     return true; // Keep channel open for sendResponse
+  }
+
+  if (message.type === "SYNC_VAULT") {
+    enqueueOperation(async () => {
+      try {
+        const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
+        if (isOffline) {
+          const storage = await getStorage(["series", "lastSync"]);
+          sendResponse({
+            status: "offline",
+            series: storage.series || {},
+            lastSync: storage.lastSync || null,
+          });
+          return;
+        }
+
+        const syncResult = await reconcileAndSync({
+          interactive: Boolean(message.payload?.interactive),
+        });
+
+        if (syncResult.status === "success") {
+          clearBadge();
+          sendResponse({
+            status: "success",
+            series: syncResult.series || {},
+            lastSync: syncResult.lastSync,
+          });
+        } else {
+          const storage = await getStorage(["series", "lastSync"]);
+          sendResponse({
+            status: "error",
+            error: syncResult.error ? syncResult.error.message : syncResult.status,
+            series: storage.series || {},
+            lastSync: storage.lastSync || null,
+          });
+        }
+      } catch (err) {
+        console.error("❌ [Sanctum] SYNC_VAULT error:", err);
+        const storage = await getStorage(["series", "lastSync"]);
+        sendResponse({
+          status: "error",
+          error: err.message,
+          series: storage.series || {},
+          lastSync: storage.lastSync || null,
+        });
+      }
+    });
+    return true;
   }
 }
 
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener(handleMessage);
+}
+
+if (typeof self !== "undefined" && typeof self.addEventListener === "function") {
+  self.addEventListener("online", () => {
+    enqueueOperation(async () => {
+      try {
+        const storage = await getStorage(["pending_sync"]);
+        if (storage.pending_sync && storage.pending_sync.length > 0) {
+          await reconcileAndSync();
+        }
+      } catch (err) {
+        console.error("❌ [Sanctum] Online sync listener error:", err);
+      }
+    });
+  });
 }
 
 if (typeof module !== "undefined" && module.exports) {
@@ -333,7 +674,17 @@ if (typeof module !== "undefined" && module.exports) {
     setSuccessBadge,
     setInFlightBadge,
     clearBadgeTimer,
+    clearBadge,
     getBadgeClearTimer: () => badgeClearTimer,
     handleMessage,
+    getStorage,
+    setStorage,
+    isValidMangaName,
+    parseChapter,
+    compareChapterParts,
+    shouldUpdateProgress,
+    fetchAndValidateDriveVault,
+    uploadDriveVault,
+    reconcileAndSync,
   };
 }
