@@ -5,6 +5,11 @@ All notable changes to the Sanctum Chrome extension will be documented in this f
 ## [Unreleased] — 2026-11-22
 
 ### Added
+- Implement Phase 3 schema normalization, automatic LWW migration, DOM batching, and dashboard sort/filter controls (`TASK-20261122-fij`)
+  - Added `normalizeSeriesKey()`, `deriveSite()`, `mergeDuplicateSeriesEntries()`, `migrateSeriesMap()`, `reconcileSeriesMaps()`, and `migrateStorageSchema()` in `background.js`, wired to `onInstalled`, `onStartup`, service-worker load, and `reconcileAndSync()` with no-op write avoidance (`areSeriesMapsEqual`) and hardened `isValidMangaName()` lowercase/trimmed prototype-key rejection.
+  - Added `#sort-btn` (`"Recently Read"` default vs `"A–Z"` toggle) in `#header` and the `Kunmanga` radio filter in `#filter-container` (`popup.html`, `popup.js`), wired `#search-btn` click to `applyFilters()`, and added pre-migration duplicate key collapse (`normalizePopupSeriesEntries`) plus empty-vault vs empty-filter messaging (`"Vault is empty. Start reading!"` vs `"No matching series found."`).
+  - Added 8 Phase 3 `node:test` unit tests across `test/background.test.js` and `test/popup.test.js` (65/65 tests passing) and updated `test/preview/mock-data.js` and `test/preview/mock-chrome.js` with lowercase slug keys, `title`/`site` metadata, a `kunmanga.com` entry, and normalized `DELETE_SERIES` matching.
+  - Affected files: `background.js`, `popup.html`, `popup.js`, `test/background.test.js`, `test/popup.test.js`, `test/preview/mock-chrome.js`, `test/preview/mock-data.js`
 - Implement Phase 2 local-first storage, offline mutation queue, and SPA navigation (`TASK-20261122-v5d`)
   - Added `chrome.storage.local` caching (`series`, `fileId`, `lastSync`, `pending_sync`) and stale `fileId` `404` recovery in `background.js`, keeping `lastSync` updated strictly on successful Google Drive syncs.
   - Added immediate cache-first popup rendering in `popup.js` with non-blocking background `SYNC_VAULT` refresh, interactive onboarding on empty cache and manual refresh, `isSafeUrl` `http`/`https` sanitization, and cache preservation when offline or on Drive errors.
@@ -15,10 +20,20 @@ All notable changes to the Sanctum Chrome extension will be documented in this f
   - Affected files: `background.js`, `content.js`, `popup.js`, `test/background.test.js`, `test/content.test.js`, `test/popup.test.js`, `test/preview/mock-chrome.js`
 
 ### Changed
+- Standardize series storage schema, batch popup DOM rendering via `DocumentFragment`, and delegate list events (`TASK-20261122-fij`)
+  - Updated `SYNC_CHAPTER`, `DELETE_SERIES`, and `reconcileAndSync()` (including empty-queue LWW reconciliation) in `background.js` to normalize keys via `name.toLowerCase().trim()` and persist `{ chapter, url, title, site, updated }`.
+  - Refactored `renderList()` in `popup.js` to batch card creation in a `DocumentFragment` and mount once via `replaceChildren(fragment)` with zero `innerHTML` or per-card listeners, handling `.btn-delete` (with repeat-click guard) and `.btn-read` via single `#list` click delegation (`handleListClick`).
+  - Updated existing `test/background.test.js` and `test/popup.test.js` mock DOM/assertions (`DocumentFragment`, `replaceChildren`, `closest`, event bubbling, normalized keys).
+  - Affected files: `background.js`, `popup.js`, `test/background.test.js`, `test/popup.test.js`
 - Replace full-document `MutationObserver` and 3-second debounce with targeted SPA navigation and 15-second dwell + scroll-depth gating (`TASK-20261122-v5d`)
   - Removed the `{ subtree: true, childList: true }` `MutationObserver` on `document` in `content.js`, resetting timers and per-route scroll/dispatch state on SPA URL transitions via `handleRouteChange()`.
   - Consolidated Drive read/validation (`fetchAndValidateDriveVault`) and write (`uploadDriveVault`) helpers with BUG-001 malformed-JSON aborts, added `clearBadge()` hygiene across `SYNC_CHAPTER`/`DELETE_SERIES`/`SYNC_VAULT`, and aligned `DELETE_SERIES` `{ status: "queued" }` handling in `popup.js`.
   - Affected files: `background.js`, `content.js`, `popup.js`
+
+### Removed
+- Remove dead cover preview markup, styles, and hover listeners (`TASK-20261122-fij`)
+  - Removed `#manga-preview`, `#preview-img`, and `.no-cover` CSS/markup from `popup.html`, removed `mouseenter`/`mousemove`/`mouseleave` cover preview logic from `popup.js`, and removed dead preview mocks from `test/popup.test.js`.
+  - Affected files: `popup.html`, `popup.js`, `test/popup.test.js`
 
 ## [Unreleased] — 2026-11-21
 
