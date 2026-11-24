@@ -78,12 +78,313 @@ async function setStorage(items) {
 
 function isValidMangaName(name) {
   if (typeof name !== "string") return false;
-  const trimmed = name.trim();
+  const trimmed = name.trim().toLowerCase();
   if (trimmed.length === 0) return false;
   if (trimmed === "__proto__" || trimmed === "constructor" || trimmed === "prototype") {
     return false;
   }
   return true;
+}
+
+function normalizeSeriesKey(name) {
+  if (!isValidMangaName(name)) return null;
+  return name.toLowerCase().trim();
+}
+
+function deriveSite(site, url) {
+  if (typeof site === "string" && site.trim().length > 0) {
+    return site.trim();
+  }
+  if (typeof url === "string" && url.trim().length > 0) {
+    try {
+      const parsed = new URL(url.trim());
+      if (parsed.hostname) {
+        return parsed.hostname.toLowerCase().replace(/^www\./, "");
+      }
+    } catch {
+      // Ignore malformed URLs
+    }
+  }
+  return "";
+}
+
+function pickPreferredTitle(primaryTitle, secondaryTitle, slug) {
+  const p = typeof primaryTitle === "string" ? primaryTitle.trim() : "";
+  const s = typeof secondaryTitle === "string" ? secondaryTitle.trim() : "";
+  if (!p) return s || slug;
+  if (!s) return p;
+  if (p === slug && s !== slug && s.toLowerCase() === slug) {
+    return s;
+  }
+  return p;
+}
+
+function mergeDuplicateSeriesEntries(existing, incoming, slug) {
+  const existingTime =
+    typeof existing.updated === "string" && existing.updated.trim()
+      ? Date.parse(existing.updated)
+      : NaN;
+  const incomingTime =
+    typeof incoming.updated === "string" && incoming.updated.trim()
+      ? Date.parse(incoming.updated)
+      : NaN;
+  const existingValid = !Number.isNaN(existingTime);
+  const incomingValid = !Number.isNaN(incomingTime);
+
+  let incomingWins = false;
+  if (incomingValid && !existingValid) {
+    incomingWins = true;
+  } else if (!incomingValid && existingValid) {
+    incomingWins = false;
+  } else if (incomingValid && existingValid) {
+    if (incomingTime > existingTime) {
+      incomingWins = true;
+    } else if (incomingTime < existingTime) {
+      incomingWins = false;
+    } else {
+      const parsedInc = parseChapter(incoming.chapter);
+      const parsedEx = parseChapter(existing.chapter);
+      if (parsedInc && parsedEx) {
+        incomingWins = compareChapterParts(parsedInc.value, parsedEx.value) >= 0;
+      } else {
+        incomingWins = true;
+      }
+    }
+  } else {
+    const parsedInc = parseChapter(incoming.chapter);
+    const parsedEx = parseChapter(existing.chapter);
+    if (parsedInc && parsedEx) {
+      incomingWins = compareChapterParts(parsedInc.value, parsedEx.value) >= 0;
+    } else {
+      incomingWins = true;
+    }
+  }
+
+  const winner = incomingWins ? incoming : existing;
+  const loser = incomingWins ? existing : incoming;
+
+  const merged = {
+    chapter: winner.chapter !== undefined ? winner.chapter : loser.chapter,
+    title: pickPreferredTitle(winner.title, loser.title, slug),
+    site:
+      (typeof winner.site === "string" && winner.site.trim()) ||
+      (typeof loser.site === "string" && loser.site.trim()) ||
+      "",
+  };
+
+  const resolvedUrl =
+    winner.url !== undefined && winner.url !== "" ? winner.url : loser.url;
+  if (resolvedUrl !== undefined) {
+    merged.url = resolvedUrl;
+  }
+
+  const resolvedUpdated =
+    incomingWins && incomingValid
+      ? incoming.updated
+      : !incomingWins && existingValid
+        ? existing.updated
+        : winner.updated !== undefined
+          ? winner.updated
+          : loser.updated;
+  if (resolvedUpdated !== undefined) {
+    merged.updated = resolvedUpdated;
+  }
+
+  return merged;
+}
+
+function areEntriesEqual(a, b) {
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const keysA = Object.keys(a).filter((k) => a[k] !== undefined);
+  const keysB = Object.keys(b).filter((k) => b[k] !== undefined);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    if (!Object.hasOwn(b, k) || a[k] !== b[k]) return false;
+  }
+  return true;
+}
+
+function areSeriesMapsEqual(mapA, mapB) {
+  if (!mapA || !mapB || typeof mapA !== "object" || typeof mapB !== "object") {
+    return false;
+  }
+  const keysA = Object.keys(mapA);
+  const keysB = Object.keys(mapB);
+  if (keysA.length !== keysB.length) return false;
+  for (const k of keysA) {
+    if (!Object.hasOwn(mapB, k)) return false;
+    if (!areEntriesEqual(mapA[k], mapB[k])) return false;
+  }
+  return true;
+}
+
+function migrateSeriesMap(rawSeries) {
+  if (!rawSeries || typeof rawSeries !== "object" || Array.isArray(rawSeries)) {
+    return { series: {}, changed: Boolean(rawSeries !== undefined && rawSeries !== null) };
+  }
+
+  const migrated = Object.create(null);
+  let changed = false;
+
+  for (const rawKey of Object.keys(rawSeries)) {
+    if (!Object.hasOwn(rawSeries, rawKey)) continue;
+    const slug = normalizeSeriesKey(rawKey);
+    const rawEntry = rawSeries[rawKey];
+
+    if (!slug || !rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+      changed = true;
+      continue;
+    }
+
+    if (rawKey !== slug) {
+      changed = true;
+    }
+
+    const trimmedKey = rawKey.trim();
+    const resolvedTitle =
+      typeof rawEntry.title === "string" && rawEntry.title.trim().length > 0
+        ? rawEntry.title.trim()
+        : trimmedKey;
+    const resolvedSite = deriveSite(rawEntry.site, rawEntry.url);
+
+    if (rawEntry.title !== resolvedTitle || rawEntry.site !== resolvedSite) {
+      changed = true;
+    }
+
+    const candidate = {
+      chapter: rawEntry.chapter,
+      title: resolvedTitle,
+      site: resolvedSite,
+    };
+    if (rawEntry.url !== undefined) {
+      candidate.url = rawEntry.url;
+    }
+    if (rawEntry.updated !== undefined) {
+      candidate.updated = rawEntry.updated;
+    }
+
+    if (Object.hasOwn(migrated, slug)) {
+      changed = true;
+      migrated[slug] = mergeDuplicateSeriesEntries(migrated[slug], candidate, slug);
+    } else {
+      migrated[slug] = candidate;
+    }
+  }
+
+  const plainSeries = {};
+  for (const slug of Object.keys(migrated)) {
+    plainSeries[slug] = migrated[slug];
+  }
+
+  return { series: plainSeries, changed };
+}
+
+function reconcileSeriesMaps(remoteSeries, localSeries) {
+  const merged = {};
+  let remoteChanged = false;
+
+  for (const slug of Object.keys(remoteSeries)) {
+    if (!Object.hasOwn(remoteSeries, slug)) continue;
+    merged[slug] = { ...remoteSeries[slug] };
+  }
+
+  for (const slug of Object.keys(localSeries)) {
+    if (!Object.hasOwn(localSeries, slug)) continue;
+    const localEntry = localSeries[slug];
+    if (!Object.hasOwn(merged, slug)) {
+      merged[slug] = { ...localEntry };
+      remoteChanged = true;
+    } else {
+      const remoteEntry = merged[slug];
+      const combined = mergeDuplicateSeriesEntries(localEntry, remoteEntry, slug);
+      if (!areEntriesEqual(remoteEntry, combined)) {
+        remoteChanged = true;
+      }
+      merged[slug] = combined;
+    }
+  }
+
+  return { series: merged, remoteChanged };
+}
+
+async function migrateStorageSchema() {
+  const storage = await getStorage(["series", "pending_sync"]);
+  const updates = {};
+  let hasUpdates = false;
+
+  if (storage.series && typeof storage.series === "object" && !Array.isArray(storage.series)) {
+    const { series: migratedSeries, changed: seriesChanged } = migrateSeriesMap(storage.series);
+    if (seriesChanged) {
+      updates.series = migratedSeries;
+      hasUpdates = true;
+    }
+  }
+
+  if (Array.isArray(storage.pending_sync) && storage.pending_sync.length > 0) {
+    let queueChanged = false;
+    const migratedQueue = [];
+    for (const mut of storage.pending_sync) {
+      if (!mut || typeof mut !== "object" || !mut.type) {
+        queueChanged = true;
+        continue;
+      }
+      const rawManga = mut.payload?.manga;
+      const slug = normalizeSeriesKey(rawManga);
+      if (!slug) {
+        queueChanged = true;
+        continue;
+      }
+      if (mut.type === "SYNC_CHAPTER") {
+        const trimmedRaw = typeof rawManga === "string" ? rawManga.trim() : slug;
+        const nextTitle =
+          (typeof mut.payload?.title === "string" && mut.payload.title.trim()) ||
+          trimmedRaw;
+        const nextSite = deriveSite(mut.payload?.site, mut.payload?.url);
+        if (
+          mut.payload.manga !== slug ||
+          mut.payload.title !== nextTitle ||
+          mut.payload.site !== nextSite
+        ) {
+          queueChanged = true;
+          migratedQueue.push({
+            ...mut,
+            payload: {
+              ...mut.payload,
+              manga: slug,
+              title: nextTitle,
+              site: nextSite,
+            },
+          });
+        } else {
+          migratedQueue.push(mut);
+        }
+      } else if (mut.type === "DELETE_SERIES") {
+        if (mut.payload?.manga !== slug) {
+          queueChanged = true;
+          migratedQueue.push({
+            ...mut,
+            payload: {
+              ...mut.payload,
+              manga: slug,
+            },
+          });
+        } else {
+          migratedQueue.push(mut);
+        }
+      } else {
+        migratedQueue.push(mut);
+      }
+    }
+    if (queueChanged) {
+      updates.pending_sync = migratedQueue;
+      hasUpdates = true;
+    }
+  }
+
+  if (hasUpdates) {
+    await setStorage(updates);
+  }
+  return { migrated: hasUpdates, ...updates };
 }
 
 // Chapter parsing and monotonic progress guard
@@ -354,6 +655,10 @@ async function reconcileAndSync(opts = {}) {
       remoteVault.series = {};
     }
 
+    const localMig = migrateSeriesMap(storage.series);
+    const remoteMig = migrateSeriesMap(remoteVault.series);
+    remoteVault.series = remoteMig.series;
+
     // 4. Gather pending mutations to reconcile
     const pendingQueue = Array.isArray(storage.pending_sync) ? [...storage.pending_sync] : [];
     const snapshotCount = pendingQueue.length;
@@ -362,42 +667,94 @@ async function reconcileAndSync(opts = {}) {
       pendingQueue.push(liveMutation);
     }
 
-    // If there are no pending mutations and no live mutation, we just refreshed from Drive
+    // If there are no pending mutations and no live mutation, migrate and reconcile local vs remote via LWW (AM-2)
     if (pendingQueue.length === 0) {
+      const { series: reconciledSeries, remoteChanged } = reconcileSeriesMaps(
+        remoteVault.series,
+        localMig.series,
+      );
+      remoteVault.series = reconciledSeries;
+
+      if (remoteMig.changed || remoteChanged) {
+        try {
+          await uploadDriveVault(fileId, token, remoteVault);
+        } catch (uploadErr) {
+          console.error("❌ [Sanctum] uploadDriveVault error:", uploadErr);
+          setErrorBadge();
+          return { status: "error", error: uploadErr };
+        }
+      }
+
       const nowIso = new Date().toISOString();
-      await setStorage({
+      const localNeedsWrite =
+        localMig.changed ||
+        storage.fileId !== fileId ||
+        !storage.lastSync ||
+        !areSeriesMapsEqual(storage.series, remoteVault.series);
+
+      const effectiveLastSync = localNeedsWrite ? nowIso : storage.lastSync;
+      if (localNeedsWrite) {
+        await setStorage({
+          series: remoteVault.series,
+          fileId: fileId,
+          lastSync: effectiveLastSync,
+        });
+      }
+      return {
+        status: "success",
         series: remoteVault.series,
-        fileId: fileId,
-        lastSync: nowIso,
-      });
-      return { status: "success", series: remoteVault.series, lastSync: nowIso, fileId };
+        lastSync: effectiveLastSync,
+        fileId,
+      };
     }
 
-    // Apply mutations in FIFO order
+    // Apply mutations in FIFO order using normalized lowercase slug keys (AC-4, AC-8)
     for (const mut of pendingQueue) {
       if (!mut || !mut.type) continue;
       if (mut.type === "SYNC_CHAPTER") {
-        const mName = typeof mut.payload?.manga === "string" ? mut.payload.manga.trim() : null;
+        const rawManga = mut.payload?.manga;
+        const slug = normalizeSeriesKey(rawManga);
         const mChapter = mut.payload?.chapter;
         const mUrl = mut.payload?.url;
         const mTime = mut.timestamp || new Date().toISOString();
-        if (isValidMangaName(mName)) {
-          const saved = Object.hasOwn(remoteVault.series, mName) ? remoteVault.series[mName] : undefined;
+        if (slug) {
+          const saved = Object.hasOwn(remoteVault.series, slug)
+            ? remoteVault.series[slug]
+            : undefined;
+          const trimmedRaw = typeof rawManga === "string" ? rawManga.trim() : slug;
+          const explicitTitle =
+            typeof mut.payload?.title === "string" && mut.payload.title.trim()
+              ? mut.payload.title.trim()
+              : "";
+          const mTitle =
+            explicitTitle ||
+            (trimmedRaw !== slug ? trimmedRaw : "") ||
+            saved?.title ||
+            trimmedRaw;
+          const mSite = deriveSite(mut.payload?.site, mUrl) || saved?.site || "";
+
           if (!saved || shouldUpdateProgress(mChapter, mTime, saved.chapter, saved.updated)) {
-            remoteVault.series[mName] = {
+            const nextEntry = {
               chapter: mChapter,
-              url: mUrl,
+              title: mTitle,
+              site: mSite,
               updated: mTime,
             };
+            if (mUrl !== undefined) {
+              nextEntry.url = mUrl;
+            } else if (saved?.url !== undefined) {
+              nextEntry.url = saved.url;
+            }
+            remoteVault.series[slug] = nextEntry;
           } else {
-            console.log(`[Sanctum] Reconciliation monotonic guard skipped ${mName} Ch. ${mChapter}`);
+            console.log(`[Sanctum] Reconciliation monotonic guard skipped ${slug} Ch. ${mChapter}`);
           }
         }
       } else if (mut.type === "DELETE_SERIES") {
-        const mName = typeof mut.payload?.manga === "string" ? mut.payload.manga.trim() : null;
-        if (isValidMangaName(mName) && remoteVault.series) {
-          if (Object.hasOwn(remoteVault.series, mName)) {
-            delete remoteVault.series[mName];
+        const slug = normalizeSeriesKey(mut.payload?.manga);
+        if (slug && remoteVault.series) {
+          if (Object.hasOwn(remoteVault.series, slug)) {
+            delete remoteVault.series[slug];
           }
         }
       }
@@ -446,7 +803,8 @@ function handleMessage(message, sender, sendResponse) {
     enqueueOperation(async () => {
       try {
         const rawManga = message.payload?.manga;
-        if (!isValidMangaName(rawManga)) {
+        const slug = normalizeSeriesKey(rawManga);
+        if (!slug) {
           console.warn("[Sanctum] SYNC_CHAPTER rejected: invalid mangaName", rawManga);
           if (typeof sendResponse === "function") {
             sendResponse({ status: "ignored", reason: "invalid_manga_name" });
@@ -454,24 +812,21 @@ function handleMessage(message, sender, sendResponse) {
           return;
         }
 
-        const mangaName = rawManga.trim();
+        const displayName = rawManga.trim();
         const newChapter = message.payload?.chapter;
         const newUrl = message.payload?.url;
         const nowIso = new Date().toISOString();
 
         const storage = await getStorage(["series", "pending_sync"]);
-        const localSeries =
-          storage.series && typeof storage.series === "object" && !Array.isArray(storage.series)
-            ? { ...storage.series }
-            : {};
+        const { series: localSeries } = migrateSeriesMap(storage.series);
 
         // 1. Monotonic guard check against current cached local series entry
-        const savedEntry = Object.hasOwn(localSeries, mangaName) ? localSeries[mangaName] : undefined;
+        const savedEntry = Object.hasOwn(localSeries, slug) ? localSeries[slug] : undefined;
         if (savedEntry) {
           const allowed = shouldUpdateProgress(newChapter, nowIso, savedEntry.chapter, savedEntry.updated);
           if (!allowed) {
             console.log(
-              `[Sanctum] Monotonic guard rejected: ${mangaName} Ch. ${newChapter} < current Ch. ${savedEntry.chapter}`,
+              `[Sanctum] Monotonic guard rejected: ${slug} Ch. ${newChapter} < current Ch. ${savedEntry.chapter}`,
             );
             if (typeof sendResponse === "function") {
               sendResponse({ status: "ignored", reason: "monotonic_downgrade" });
@@ -480,21 +835,40 @@ function handleMessage(message, sender, sendResponse) {
           }
         }
 
+        const explicitTitle =
+          typeof message.payload?.title === "string" && message.payload.title.trim()
+            ? message.payload.title.trim()
+            : "";
+        const resolvedTitle =
+          explicitTitle ||
+          (displayName !== slug ? displayName : "") ||
+          savedEntry?.title ||
+          displayName;
+        const resolvedSite = deriveSite(message.payload?.site, newUrl) || savedEntry?.site || "";
+
         // 2. Optimistic local cache update
-        localSeries[mangaName] = {
+        const nextEntry = {
           chapter: newChapter,
-          url: newUrl,
+          title: resolvedTitle,
+          site: resolvedSite,
           updated: nowIso,
         };
+        if (newUrl !== undefined) {
+          nextEntry.url = newUrl;
+        } else if (savedEntry?.url !== undefined) {
+          nextEntry.url = savedEntry.url;
+        }
+        localSeries[slug] = nextEntry;
         await setStorage({ series: localSeries });
 
         const liveMutation = {
           type: "SYNC_CHAPTER",
           payload: {
-            manga: mangaName,
+            manga: slug,
+            title: resolvedTitle,
             chapter: newChapter,
             url: newUrl,
-            site: message.payload?.site,
+            site: resolvedSite,
           },
           timestamp: nowIso,
         };
@@ -535,7 +909,8 @@ function handleMessage(message, sender, sendResponse) {
     enqueueOperation(async () => {
       try {
         const rawManga = message.payload?.manga;
-        if (!isValidMangaName(rawManga)) {
+        const slug = normalizeSeriesKey(rawManga);
+        if (!slug) {
           console.warn("[Sanctum] DELETE_SERIES rejected: invalid mangaName", rawManga);
           if (typeof sendResponse === "function") {
             sendResponse({ status: "error", error: "Invalid manga name" });
@@ -543,23 +918,21 @@ function handleMessage(message, sender, sendResponse) {
           return;
         }
 
-        const mangaName = rawManga.trim();
         const nowIso = new Date().toISOString();
 
         // 1. Optimistic local cache delete
         const storage = await getStorage(["series", "pending_sync"]);
-        const localSeries =
-          storage.series && typeof storage.series === "object" && !Array.isArray(storage.series)
-            ? { ...storage.series }
-            : {};
-        if (Object.hasOwn(localSeries, mangaName)) {
-          delete localSeries[mangaName];
+        const { series: localSeries, changed: localMigrated } = migrateSeriesMap(storage.series);
+        if (Object.hasOwn(localSeries, slug)) {
+          delete localSeries[slug];
+          await setStorage({ series: localSeries });
+        } else if (localMigrated) {
           await setStorage({ series: localSeries });
         }
 
         const liveMutation = {
           type: "DELETE_SERIES",
-          payload: { manga: mangaName },
+          payload: { manga: slug },
           timestamp: nowIso,
         };
 
@@ -601,6 +974,7 @@ function handleMessage(message, sender, sendResponse) {
       try {
         const isOffline = typeof navigator !== "undefined" && navigator.onLine === false;
         if (isOffline) {
+          await migrateStorageSchema();
           const storage = await getStorage(["series", "lastSync"]);
           sendResponse({
             status: "offline",
@@ -622,6 +996,7 @@ function handleMessage(message, sender, sendResponse) {
             lastSync: syncResult.lastSync,
           });
         } else {
+          await migrateStorageSchema();
           const storage = await getStorage(["series", "lastSync"]);
           sendResponse({
             status: "error",
@@ -647,6 +1022,23 @@ function handleMessage(message, sender, sendResponse) {
 
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener(handleMessage);
+}
+
+if (typeof chrome !== "undefined" && chrome.runtime) {
+  if (chrome.runtime.onInstalled && typeof chrome.runtime.onInstalled.addListener === "function") {
+    chrome.runtime.onInstalled.addListener(() => {
+      enqueueOperation(() => migrateStorageSchema());
+    });
+  }
+  if (chrome.runtime.onStartup && typeof chrome.runtime.onStartup.addListener === "function") {
+    chrome.runtime.onStartup.addListener(() => {
+      enqueueOperation(() => migrateStorageSchema());
+    });
+  }
+}
+
+if (typeof module === "undefined") {
+  enqueueOperation(() => migrateStorageSchema());
 }
 
 if (typeof self !== "undefined" && typeof self.addEventListener === "function") {
@@ -680,6 +1072,12 @@ if (typeof module !== "undefined" && module.exports) {
     getStorage,
     setStorage,
     isValidMangaName,
+    normalizeSeriesKey,
+    deriveSite,
+    mergeDuplicateSeriesEntries,
+    migrateSeriesMap,
+    reconcileSeriesMaps,
+    migrateStorageSchema,
     parseChapter,
     compareChapterParts,
     shouldUpdateProgress,

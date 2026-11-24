@@ -2,12 +2,13 @@ let listElement = null;
 let loadingElement = null;
 let statusElement = null;
 let refreshBtn = null;
+let sortBtn = null;
 let searchInput = null;
-let mangaPreview = null;
-let previewImage = null;
+let searchBtn = null;
 let filterContainer = null;
 
 let allSeries = [];
+let currentSort = "recent";
 
 function isSafeUrl(url) {
   if (typeof url !== "string") return false;
@@ -17,6 +18,104 @@ function isSafeUrl(url) {
   } catch {
     return false;
   }
+}
+
+function isValidPopupSeriesKey(name) {
+  if (typeof name !== "string") return false;
+  const normalized = name.trim().toLowerCase();
+  if (normalized.length === 0) return false;
+  if (
+    normalized === "__proto__" ||
+    normalized === "constructor" ||
+    normalized === "prototype"
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function getDisplayTitle(key, info) {
+  if (info && typeof info.title === "string" && info.title.trim().length > 0) {
+    return info.title.trim();
+  }
+  return typeof key === "string" ? key.trim() : String(key || "");
+}
+
+function normalizePopupSeriesEntries(seriesObj) {
+  if (!seriesObj || typeof seriesObj !== "object" || Array.isArray(seriesObj)) {
+    return [];
+  }
+  const bySlug = Object.create(null);
+  for (const rawKey of Object.keys(seriesObj)) {
+    if (!Object.hasOwn(seriesObj, rawKey)) continue;
+    if (!isValidPopupSeriesKey(rawKey)) continue;
+    const rawInfo = seriesObj[rawKey];
+    if (!rawInfo || typeof rawInfo !== "object" || Array.isArray(rawInfo)) continue;
+
+    const slug = rawKey.toLowerCase().trim();
+    const displayTitle = getDisplayTitle(rawKey, rawInfo);
+
+    if (!Object.hasOwn(bySlug, slug)) {
+      bySlug[slug] = [rawKey, { ...rawInfo, title: displayTitle }];
+    } else {
+      const [existingKey, existingInfo] = bySlug[slug];
+      const exTime =
+        typeof existingInfo.updated === "string" && existingInfo.updated.trim()
+          ? Date.parse(existingInfo.updated)
+          : NaN;
+      const inTime =
+        typeof rawInfo.updated === "string" && rawInfo.updated.trim()
+          ? Date.parse(rawInfo.updated)
+          : NaN;
+      const exValid = !Number.isNaN(exTime);
+      const inValid = !Number.isNaN(inTime);
+      const incomingWins =
+        (inValid && !exValid) || (inValid && exValid && inTime > exTime);
+      const winnerInfo = incomingWins ? rawInfo : existingInfo;
+      const loserInfo = incomingWins ? existingInfo : rawInfo;
+      const winnerTitle = getDisplayTitle(
+        incomingWins ? rawKey : existingKey,
+        winnerInfo,
+      );
+      const loserTitle = getDisplayTitle(
+        incomingWins ? existingKey : rawKey,
+        loserInfo,
+      );
+      const preferredTitle =
+        winnerTitle === slug &&
+        loserTitle !== slug &&
+        loserTitle.toLowerCase() === slug
+          ? loserTitle
+          : winnerTitle;
+
+      bySlug[slug] = [
+        slug,
+        {
+          ...loserInfo,
+          ...winnerInfo,
+          title: preferredTitle,
+          site: winnerInfo.site || loserInfo.site || "",
+        },
+      ];
+    }
+  }
+  return Object.keys(bySlug).map((s) => bySlug[s]);
+}
+
+function sortSeriesEntries(entries, sortMode = currentSort) {
+  if (!Array.isArray(entries)) return [];
+  const isAz = sortMode === "az" || sortMode === "A–Z" || sortMode === "A-Z";
+  return [...entries].sort((a, b) => {
+    const titleA = getDisplayTitle(a[0], a[1]).toLowerCase();
+    const titleB = getDisplayTitle(b[0], b[1]).toLowerCase();
+    if (isAz) {
+      return titleA.localeCompare(titleB);
+    }
+    const updatedCmp = String(b[1]?.updated || "").localeCompare(
+      String(a[1]?.updated || ""),
+    );
+    return updatedCmp !== 0 ? updatedCmp : titleA.localeCompare(titleB);
+  });
 }
 
 async function getStorage(keys) {
@@ -30,49 +129,61 @@ async function getStorage(keys) {
   });
 }
 
-const renderList = (series) => {
-  if (!listElement) return;
-  listElement.innerHTML = "";
+const renderList = (series, isFilterActive = allSeries.length > 0) => {
+  if (!listElement || typeof document === "undefined") return;
 
-  if (series.length === 0) {
-    listElement.innerHTML =
-      "<div class='status'>Vault is empty. Start reading!</div>";
+  const fragment = document.createDocumentFragment();
+
+  if (!Array.isArray(series) || series.length === 0) {
+    const statusDiv = document.createElement("div");
+    statusDiv.className = "status";
+    statusDiv.textContent = isFilterActive
+      ? "No matching series found."
+      : "Vault is empty. Start reading!";
+    fragment.appendChild(statusDiv);
+    listElement.replaceChildren(fragment);
     return;
   }
 
   series.forEach(([name, info]) => {
+    const safeInfo = info && typeof info === "object" ? info : {};
     const card = document.createElement("div");
     card.className = "manga-card";
+    card.setAttribute("data-manga", name);
 
     // 1. Date Formatting
-    const lastUpdated = info.updated
+    const parsedTime =
+      typeof safeInfo.updated === "string" && safeInfo.updated.trim()
+        ? Date.parse(safeInfo.updated)
+        : NaN;
+    const lastUpdated = !Number.isNaN(parsedTime)
       ? new Intl.DateTimeFormat("en-US", {
           month: "short",
           day: "numeric",
           year: "numeric",
           hour: "2-digit",
           minute: "2-digit",
-        }).format(new Date(info.updated))
+        }).format(new Date(parsedTime))
       : "Date Unknown";
 
     // 2. Site Logic
     let siteTag = "???";
     let tagColor = "#27ae60";
-    if (info.url) {
-      const lowerUrl = info.url.toLowerCase();
-      if (lowerUrl.includes("mangadex")) {
+    const siteSource = (safeInfo.site || safeInfo.url || "").toLowerCase();
+    if (siteSource) {
+      if (siteSource.includes("mangadex")) {
         siteTag = "Mangadex";
         tagColor = "#ff6740";
-      } else if (lowerUrl.includes("asura")) {
+      } else if (siteSource.includes("asura")) {
         siteTag = "AsuraScans";
         tagColor = "#7d42ff";
-      } else if (lowerUrl.includes("mangahere")) {
+      } else if (siteSource.includes("mangahere")) {
         siteTag = "Mangahere";
         tagColor = "rgb(231, 49, 255)";
-      } else if (lowerUrl.includes("mangaplus")) {
+      } else if (siteSource.includes("mangaplus")) {
         siteTag = "MangaPlus";
         tagColor = "#efefef";
-      } else if (lowerUrl.includes("kunmanga")) {
+      } else if (siteSource.includes("kunmanga")) {
         siteTag = "KunManga";
         tagColor = "rgb(1, 255, 183)";
       }
@@ -86,7 +197,7 @@ const renderList = (series) => {
     const titleEl = document.createElement("span");
     titleEl.className = "manga-title";
     titleEl.style.cssText = "flex: 1; padding-right: 10px;";
-    titleEl.textContent = name;
+    titleEl.textContent = getDisplayTitle(name, safeInfo);
 
     const dateEl = document.createElement("span");
     dateEl.style.cssText = "font-size: 10px; color: #777; white-space: nowrap;";
@@ -110,7 +221,7 @@ const renderList = (series) => {
 
     const chapterSpan = document.createElement("span");
     chapterSpan.style.cssText = "font-size: 13px;";
-    chapterSpan.textContent = `Chapter ${info.chapter ?? ""}`;
+    chapterSpan.textContent = `Chapter ${safeInfo.chapter ?? ""}`;
 
     tagGroup.appendChild(tagSpan);
     tagGroup.appendChild(chapterSpan);
@@ -122,7 +233,9 @@ const renderList = (series) => {
     readLink.className = "btn-read";
     readLink.target = "_blank";
     readLink.rel = "noopener noreferrer";
-    readLink.href = isSafeUrl(info.url) ? info.url : "#";
+    const safeUrl = isSafeUrl(safeInfo.url) ? safeInfo.url : "#";
+    readLink.href = safeUrl;
+    readLink.setAttribute("href", safeUrl);
     const readImg = document.createElement("img");
     readImg.src = "arrow-right.svg";
     readImg.alt = "Continue reading";
@@ -145,63 +258,91 @@ const renderList = (series) => {
     card.appendChild(headerRow);
     card.appendChild(infoRow);
 
-    // Art Cover Preview Function
-    if (info.cover && mangaPreview && previewImage) {
-      titleEl.addEventListener("mouseenter", () => {
-        previewImage.src = info.cover;
-        mangaPreview.style.display = "block";
-      });
-
-      titleEl.addEventListener("mousemove", (e) => {
-        const offset = 100;
-        mangaPreview.style.left = e.clientX + "px";
-        mangaPreview.style.top = e.clientY - offset + "px";
-      });
-
-      titleEl.addEventListener("mouseleave", () => {
-        mangaPreview.style.display = "none";
-        previewImage.src = "";
-      });
-    } else {
-      titleEl.classList.add("no-cover");
-    }
-
-    // Delete Function
-    deleteBtn.addEventListener("click", function () {
-      const mangaName = this.getAttribute("data-manga");
-      if (confirm(`Delete ${mangaName} from your history?`)) {
-        this.innerText = "Deleting...";
-        if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
-          chrome.runtime.sendMessage(
-            {
-              type: "DELETE_SERIES",
-              payload: { manga: mangaName },
-            },
-            (response) => {
-              if (chrome.runtime && chrome.runtime.lastError) {
-                console.warn("[Sanctum] Delete message error:", chrome.runtime.lastError);
-                this.innerText = "Error";
-                return;
-              }
-              if (response && (response.status === "success" || response.status === "queued")) {
-                allSeries = allSeries.filter(([n]) => n !== mangaName);
-                card.remove();
-                if (allSeries.length === 0 && listElement) {
-                  listElement.innerHTML =
-                    "<div class='status'>Vault is empty. Start reading!</div>";
-                }
-              } else {
-                this.innerText = "Error";
-              }
-            },
-          );
-        }
-      }
-    });
-
-    listElement.appendChild(card);
+    fragment.appendChild(card);
   });
+
+  listElement.replaceChildren(fragment);
 };
+
+function handleListClick(e) {
+  const target = e && e.target;
+  if (!target || typeof target.closest !== "function") return;
+
+  const readLink = target.closest(".btn-read");
+  if (readLink) {
+    const href = readLink.getAttribute("href") || readLink.href || "";
+    if (!isSafeUrl(href)) {
+      if (typeof e.preventDefault === "function") {
+        e.preventDefault();
+      }
+    }
+    return;
+  }
+
+  const deleteBtn = target.closest(".btn-delete");
+  if (!deleteBtn) return;
+
+  if (deleteBtn.disabled || deleteBtn.getAttribute("data-deleting") === "true") {
+    return;
+  }
+
+  const mangaKey = deleteBtn.getAttribute("data-manga");
+  if (!mangaKey) return;
+
+  const normalizedKey = mangaKey.toLowerCase().trim();
+  const matchedEntry = allSeries.find(
+    ([k]) => k.toLowerCase().trim() === normalizedKey,
+  );
+  const displayTitle = matchedEntry
+    ? getDisplayTitle(matchedEntry[0], matchedEntry[1])
+    : mangaKey;
+
+  const confirmFn = typeof confirm === "function" ? confirm : () => true;
+  if (!confirmFn(`Delete ${displayTitle} from your history?`)) {
+    return;
+  }
+
+  deleteBtn.disabled = true;
+  deleteBtn.setAttribute("data-deleting", "true");
+  deleteBtn.textContent = "Deleting...";
+
+  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.sendMessage) {
+    chrome.runtime.sendMessage(
+      {
+        type: "DELETE_SERIES",
+        payload: { manga: normalizedKey },
+      },
+      (response) => {
+        if (chrome.runtime && chrome.runtime.lastError) {
+          console.warn("[Sanctum] Delete message error:", chrome.runtime.lastError);
+          deleteBtn.disabled = false;
+          deleteBtn.setAttribute("data-deleting", "false");
+          deleteBtn.textContent = "Error";
+          return;
+        }
+        if (response && (response.status === "success" || response.status === "queued")) {
+          allSeries = allSeries.filter(
+            ([n]) => n.toLowerCase().trim() !== normalizedKey,
+          );
+          const card = deleteBtn.closest(".manga-card");
+          if (card && typeof card.remove === "function") {
+            card.remove();
+          }
+          if (
+            allSeries.length === 0 ||
+            (listElement && listElement.children.length === 0)
+          ) {
+            applyFilters();
+          }
+        } else {
+          deleteBtn.disabled = false;
+          deleteBtn.setAttribute("data-deleting", "false");
+          deleteBtn.textContent = "Error";
+        }
+      },
+    );
+  }
+}
 
 const applyFilters = () => {
   const searchText =
@@ -213,18 +354,23 @@ const applyFilters = () => {
       document.querySelector('input[name="filter"]:checked')?.value) ||
     "all";
 
-  let filtered = allSeries;
+  if (allSeries.length === 0) {
+    renderList([], false);
+    return;
+  }
+
+  let filtered = sortSeriesEntries(allSeries, currentSort);
   if (selectedFilter !== "all") {
     filtered = filtered.filter(([, data]) =>
-      data.url && data.url.toLowerCase().includes(selectedFilter),
+      (data?.site || data?.url || "").toLowerCase().includes(selectedFilter),
     );
   }
   if (searchText) {
-    filtered = filtered.filter(([name]) =>
-      name.toLowerCase().includes(searchText),
+    filtered = filtered.filter(([name, data]) =>
+      getDisplayTitle(name, data).toLowerCase().includes(searchText),
     );
   }
-  renderList(filtered);
+  renderList(filtered, true);
 };
 
 const syncVault = async (opts = {}) => {
@@ -245,7 +391,7 @@ const syncVault = async (opts = {}) => {
           console.warn("[Sanctum] SYNC_VAULT error:", chrome.runtime.lastError);
           if (loadingElement) loadingElement.style.display = "none";
           if (statusElement) {
-            statusElement.innerText =
+            statusElement.textContent =
               allSeries.length === 0
                 ? "Error accessing Vault. Check your connection."
                 : "Sync failed (showing cached).";
@@ -258,31 +404,29 @@ const syncVault = async (opts = {}) => {
           if (loadingElement) loadingElement.style.display = "none";
           const seriesData =
             response.series && typeof response.series === "object" ? response.series : {};
-          allSeries = Object.entries(seriesData).sort((a, b) =>
-            a[0].localeCompare(b[0]),
+          allSeries = sortSeriesEntries(
+            normalizePopupSeriesEntries(seriesData),
+            currentSort,
           );
           applyFilters();
           if (statusElement) {
             const syncDate = response.lastSync ? new Date(response.lastSync) : new Date();
-            statusElement.innerText = `Last updated: ${syncDate.toLocaleTimeString()}`;
+            statusElement.textContent = `Last updated: ${syncDate.toLocaleTimeString()}`;
           }
         } else {
           // Offline or sync failure: preserve cached series!
           if (loadingElement) loadingElement.style.display = "none";
           if (allSeries.length === 0) {
-            if (listElement) {
-              listElement.innerHTML =
-                "<div class='status'>Vault is empty. Start reading!</div>";
-            }
+            renderList([], false);
             if (statusElement) {
-              statusElement.innerText =
+              statusElement.textContent =
                 response?.status === "offline"
                   ? "Offline mode."
                   : "Error accessing Vault. Check your connection.";
             }
           } else {
             if (statusElement) {
-              statusElement.innerText =
+              statusElement.textContent =
                 response?.status === "offline"
                   ? "Offline (showing cached)."
                   : "Sync failed (showing cached).";
@@ -301,14 +445,14 @@ const loadVault = async () => {
   try {
     const cached = await getStorage(["series", "lastSync"]);
     if (cached && cached.series && typeof cached.series === "object") {
-      const entries = Object.entries(cached.series);
+      const entries = normalizePopupSeriesEntries(cached.series);
       if (entries.length > 0) {
         hasCachedData = true;
-        allSeries = entries.sort((a, b) => a[0].localeCompare(b[0]));
+        allSeries = sortSeriesEntries(entries, currentSort);
         if (loadingElement) loadingElement.style.display = "none";
         applyFilters();
         if (statusElement && cached.lastSync) {
-          statusElement.innerText = `Last updated: ${new Date(cached.lastSync).toLocaleTimeString()}`;
+          statusElement.textContent = `Last updated: ${new Date(cached.lastSync).toLocaleTimeString()}`;
         }
       }
     }
@@ -328,19 +472,31 @@ function initPopupDom() {
   loadingElement = document.getElementById("loading");
   statusElement = document.getElementById("status");
   refreshBtn = document.getElementById("refresh-btn");
+  sortBtn = document.getElementById("sort-btn");
   searchInput = document.getElementById("search-field");
-  mangaPreview = document.getElementById("manga-preview");
-  previewImage = document.getElementById("preview-img");
+  searchBtn = document.getElementById("search-btn");
   filterContainer = document.getElementById("filter-container");
 
-  if (previewImage) {
-    previewImage.addEventListener("error", () => {
-      if (mangaPreview) mangaPreview.style.display = "none";
-    });
+  if (listElement) {
+    listElement.addEventListener("click", handleListClick);
   }
 
   if (searchInput) {
     searchInput.addEventListener("input", applyFilters);
+  }
+
+  if (searchBtn) {
+    searchBtn.addEventListener("click", applyFilters);
+  }
+
+  if (sortBtn) {
+    sortBtn.textContent = currentSort === "az" ? "A–Z" : "Recently Read";
+    sortBtn.addEventListener("click", () => {
+      currentSort = currentSort === "recent" ? "az" : "recent";
+      sortBtn.textContent = currentSort === "az" ? "A–Z" : "Recently Read";
+      allSeries = sortSeriesEntries(allSeries, currentSort);
+      applyFilters();
+    });
   }
 
   if (filterContainer) {
@@ -355,10 +511,11 @@ function initPopupDom() {
     refreshBtn.addEventListener("click", () => {
       refreshBtn.classList.add("spinning");
       if (allSeries.length === 0) {
-        if (listElement) listElement.innerHTML = "";
+        if (listElement && typeof listElement.replaceChildren === "function") {
+          listElement.replaceChildren();
+        }
         if (loadingElement) {
           loadingElement.style.display = "block";
-          loadingElement.innerHTML = `<img src="refresh.svg" class="spinning" /><p>Fetching your records...</p>`;
         }
       }
       if (searchInput) searchInput.value = "";
@@ -392,6 +549,17 @@ if (typeof module !== "undefined" && module.exports) {
     loadVault,
     initPopupDom,
     isSafeUrl,
+    getDisplayTitle,
+    normalizePopupSeriesEntries,
+    sortSeriesEntries,
+    getSortMode: () => currentSort,
+    setSortMode: (mode) => {
+      currentSort = mode === "az" || mode === "A–Z" || mode === "A-Z" ? "az" : "recent";
+      if (sortBtn) {
+        sortBtn.textContent = currentSort === "az" ? "A–Z" : "Recently Read";
+      }
+      allSeries = sortSeriesEntries(allSeries, currentSort);
+    },
     getAllSeries: () => allSeries,
     setAllSeries: (s) => {
       allSeries = s;

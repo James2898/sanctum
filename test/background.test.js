@@ -15,6 +15,12 @@ const {
   getStorage,
   setStorage,
   isValidMangaName,
+  normalizeSeriesKey,
+  deriveSite,
+  mergeDuplicateSeriesEntries,
+  migrateSeriesMap,
+  reconcileSeriesMaps,
+  migrateStorageSchema,
   parseChapter,
   compareChapterParts,
   shouldUpdateProgress,
@@ -695,7 +701,11 @@ test("DELETE_SERIES: successfully deletes series and patches Drive when file exi
     assert.deepEqual(responseData, { status: "success" });
     assert.deepEqual(patchedBody, {
       series: {
-        "Omniscient Reader": { chapter: "100" },
+        "omniscient reader": {
+          chapter: "100",
+          title: "Omniscient Reader",
+          site: "",
+        },
       },
     });
   } finally {
@@ -850,9 +860,11 @@ test("SYNC_CHAPTER: monotonic guard rejects downgrade without updating storage o
   let patchCalled = false;
   const mockStorage = createMockStorage({
     series: {
-      "Solo Leveling": {
+      "solo leveling": {
         chapter: "100",
         url: "https://test.com/ch100",
+        title: "Solo Leveling",
+        site: "test.com",
         updated: "2026-11-20T00:00:00Z",
       },
     },
@@ -896,7 +908,7 @@ test("SYNC_CHAPTER: monotonic guard rejects downgrade without updating storage o
     // Monotonic guard should reject:
     assert.equal(patchCalled, false, "Drive PATCH must not be called on downgrade");
     const store = mockStorage.getStore();
-    assert.equal(store.series["Solo Leveling"].chapter, "100", "Local cache chapter must remain 100");
+    assert.equal(store.series["solo leveling"].chapter, "100", "Local cache chapter must remain 100");
     assert.equal(store.pending_sync.length, 0, "Downgrade mutation must NOT be enqueued to pending_sync");
     assert.equal(badgeCalls.some((c) => c.text === "!"), false, "Error badge must not be set on downgrade");
   } finally {
@@ -950,11 +962,15 @@ test("chrome.storage.local: SYNC_CHAPTER caches series, fileId, and updates last
     await enqueueOperation(async () => {});
 
     const store = mockStorage.getStore();
-    assert.ok(store.series["Chainsaw Man"], "Series must be saved in storage");
-    assert.equal(store.series["Chainsaw Man"].chapter, "10");
+    assert.ok(store.series["chainsaw man"], "Series must be saved in storage under normalized slug");
+    assert.equal(store.series["chainsaw man"].chapter, "10");
+    assert.equal(store.series["chainsaw man"].title, "Chainsaw Man");
+    assert.equal(store.series["chainsaw man"].site, "test.com");
     assert.equal(store.fileId, "file-xyz-123", "Drive fileId must be cached in storage");
     assert.ok(store.lastSync, "lastSync timestamp must be updated in storage");
-    assert.equal(uploadedPayload.series["Chainsaw Man"].chapter, "10", "Drive must be patched with new chapter");
+    assert.equal(uploadedPayload.series["chainsaw man"].chapter, "10", "Drive must be patched with new chapter");
+    assert.equal(uploadedPayload.series["chainsaw man"].title, "Chainsaw Man");
+    assert.equal(uploadedPayload.series["chainsaw man"].site, "test.com");
   } finally {
     delete global.chrome;
     global.fetch = originalFetch;
@@ -1074,13 +1090,16 @@ test("offline mutation queue: enqueues pending_sync and optimistically updates l
 
     let store = mockStorage.getStore();
     // Optimistic cache update
-    assert.equal(store.series["Solo Leveling"].chapter, "55", "Local cache must be updated optimistically");
+    assert.equal(store.series["solo leveling"].chapter, "55", "Local cache must be updated optimistically");
+    assert.equal(store.series["solo leveling"].title, "Solo Leveling");
+    assert.equal(store.series["solo leveling"].site, "test.com");
     // lastSync untouched
     assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated while offline");
     // Appended to pending_sync
     assert.equal(store.pending_sync.length, 1);
     assert.equal(store.pending_sync[0].type, "SYNC_CHAPTER");
     assert.equal(store.pending_sync[0].payload.chapter, "55");
+    assert.equal(store.pending_sync[0].payload.manga, "solo leveling");
     // Badge hygiene: clear badge while offline (never leave stuck '...')
     assert.equal(badgeCalls.some((c) => c.text === "..."), false, "Must not set in-flight badge while offline");
 
@@ -1100,7 +1119,7 @@ test("offline mutation queue: enqueues pending_sync and optimistically updates l
 
     store = mockStorage.getStore();
     assert.deepEqual(deleteResponse, { status: "success" });
-    assert.equal(store.series["Solo Leveling"], undefined, "Deleted series must be removed optimistically from cache");
+    assert.equal(store.series["solo leveling"], undefined, "Deleted series must be removed optimistically from cache");
     assert.equal(store.pending_sync.length, 2);
     assert.equal(store.pending_sync[1].type, "DELETE_SERIES");
     assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must remain untouched");
@@ -1186,15 +1205,17 @@ test("FIFO reconciliation: online sync replays pending_sync mutations in FIFO or
 
     // Verify FIFO applied mutations:
     // Tower of God had Ch. 105 then Ch. 110 -> final must be Ch. 110
-    assert.equal(patchedBody.series["Tower of God"].chapter, "110");
+    assert.equal(patchedBody.series["tower of god"].chapter, "110");
+    assert.equal(patchedBody.series["tower of god"].title, "Tower of God");
+    assert.equal(patchedBody.series["tower of god"].site, "test.com");
     // Old Series was deleted -> must be absent from patched body
-    assert.equal(patchedBody.series["Old Series"], undefined);
+    assert.equal(patchedBody.series["old series"], undefined);
 
     // Verify storage was updated and pending_sync queue cleared
     const store = mockStorage.getStore();
     assert.equal(store.pending_sync.length, 0, "pending_sync items must be cleared after reconciliation");
-    assert.equal(store.series["Tower of God"].chapter, "110");
-    assert.equal(store.series["Old Series"], undefined);
+    assert.equal(store.series["tower of god"].chapter, "110");
+    assert.equal(store.series["old series"], undefined);
     assert.ok(store.lastSync, "lastSync must be updated upon successful reconciliation");
   } finally {
     delete global.chrome;
@@ -1295,11 +1316,14 @@ test("AC-7 & Blocker 1: SYNC_CHAPTER enqueues mutation to pending_sync and retai
       await enqueueOperation(async () => {});
 
       const store = mockStorage.getStore();
-      assert.equal(store.series["Solo Leveling"].chapter, "101", "Must update local cache optimistically");
+      assert.equal(store.series["solo leveling"].chapter, "101", "Must update local cache optimistically");
+      assert.equal(store.series["solo leveling"].title, "Solo Leveling");
+      assert.equal(store.series["solo leveling"].site, "test.com");
       assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated when Drive PATCH fails");
       assert.equal(store.pending_sync.length, 1, "Must enqueue mutation to pending_sync");
       assert.equal(store.pending_sync[0].type, "SYNC_CHAPTER");
       assert.equal(store.pending_sync[0].payload.chapter, "101");
+      assert.equal(store.pending_sync[0].payload.manga, "solo leveling");
       assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge on PATCH failure");
     } finally {
       delete global.chrome;
@@ -1337,10 +1361,12 @@ test("AC-7 & Blocker 1: SYNC_CHAPTER enqueues mutation to pending_sync and retai
       await enqueueOperation(async () => {});
 
       const store = mockStorage.getStore();
-      assert.equal(store.series["Omniscient Reader"].chapter, "50", "Must update local cache optimistically");
+      assert.equal(store.series["omniscient reader"].chapter, "50", "Must update local cache optimistically");
+      assert.equal(store.series["omniscient reader"].title, "Omniscient Reader");
+      assert.equal(store.series["omniscient reader"].site, "test.com");
       assert.equal(store.lastSync, undefined, "lastSync must NOT be set on network error");
       assert.equal(store.pending_sync.length, 1, "Must enqueue mutation to pending_sync");
-      assert.equal(store.pending_sync[0].payload.manga, "Omniscient Reader");
+      assert.equal(store.pending_sync[0].payload.manga, "omniscient reader");
       assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge on network rejection");
     } finally {
       delete global.chrome;
@@ -1384,9 +1410,11 @@ test("AC-7 & Blocker 1: SYNC_CHAPTER enqueues mutation to pending_sync and retai
       await enqueueOperation(async () => {});
 
       const store = mockStorage.getStore();
-      assert.equal(store.series["Chainsaw Man"].chapter, "10", "Must update local cache optimistically");
+      assert.equal(store.series["chainsaw man"].chapter, "10", "Must update local cache optimistically");
+      assert.equal(store.series["chainsaw man"].title, "Chainsaw Man");
+      assert.equal(store.series["chainsaw man"].site, "test.com");
       assert.equal(store.pending_sync.length, 1, "Must enqueue mutation when createFile fails");
-      assert.equal(store.pending_sync[0].payload.manga, "Chainsaw Man");
+      assert.equal(store.pending_sync[0].payload.manga, "chainsaw man");
       assert.equal(badgeCalls.some((c) => c.text === "!"), true, "Must set error badge when createFile fails");
     } finally {
       delete global.chrome;
@@ -1444,11 +1472,12 @@ test("AC-7 & Blocker 1: DELETE_SERIES enqueues mutation to pending_sync and resp
       await enqueueOperation(async () => {});
 
       const store = mockStorage.getStore();
-      assert.equal(store.series["Solo Leveling"], undefined, "Series must be removed optimistically from local cache");
+      assert.equal(store.series["solo leveling"], undefined, "Series must be removed optimistically from local cache");
+      assert.equal(store.series["Solo Leveling"], undefined, "Legacy key must also be absent");
       assert.equal(store.lastSync, "2026-11-20T00:00:00Z", "lastSync must NOT be updated when PATCH fails");
       assert.equal(store.pending_sync.length, 1, "Must enqueue DELETE_SERIES mutation");
       assert.equal(store.pending_sync[0].type, "DELETE_SERIES");
-      assert.equal(store.pending_sync[0].payload.manga, "Solo Leveling");
+      assert.equal(store.pending_sync[0].payload.manga, "solo leveling");
       assert.deepEqual(responseData, { status: "queued" }, "Must respond with queued status to popup");
     } finally {
       delete global.chrome;
@@ -1492,9 +1521,10 @@ test("AC-7 & Blocker 1: DELETE_SERIES enqueues mutation to pending_sync and resp
       await enqueueOperation(async () => {});
 
       const store = mockStorage.getStore();
-      assert.equal(store.series["Tower of God"], undefined, "Series must be removed optimistically");
+      assert.equal(store.series["tower of god"], undefined, "Series must be removed optimistically");
+      assert.equal(store.series["Tower of God"], undefined, "Legacy key must also be absent");
       assert.equal(store.pending_sync.length, 1);
-      assert.equal(store.pending_sync[0].payload.manga, "Tower of God");
+      assert.equal(store.pending_sync[0].payload.manga, "tower of god");
       assert.deepEqual(responseData, { status: "queued" });
     } finally {
       delete global.chrome;
@@ -1628,8 +1658,10 @@ test("AC-10 & Blocker 3(c): Re-entrancy / snapshot-prefix safety: mutations appe
     const finalStore = mockStorage.getStore();
     assert.equal(finalStore.pending_sync.length, 1, "Only the snapshotted prefix should be removed");
     assert.equal(finalStore.pending_sync[0].payload.manga, "Mut3 (Appended In-Flight)", "In-flight appended mutation must be preserved");
-    assert.equal(finalStore.series["Mut1"].chapter, "1");
-    assert.equal(finalStore.series["Mut2"].chapter, "2");
+    assert.equal(finalStore.series["mut1"].chapter, "1");
+    assert.equal(finalStore.series["mut1"].title, "Mut1");
+    assert.equal(finalStore.series["mut2"].chapter, "2");
+    assert.equal(finalStore.series["mut2"].title, "Mut2");
   } finally {
     delete global.chrome;
     global.fetch = originalFetch;
@@ -1700,7 +1732,7 @@ test("Warning #4: clearBadge helper and badge state reset on SYNC_VAULT success"
     setErrorBadge();
     const mockStorage = createMockStorage({
       fileId: "vault-clear-badge",
-      series: { "Solo Leveling": { chapter: "10" } },
+      series: { "solo leveling": { chapter: "10", title: "Solo Leveling", site: "" } },
       pending_sync: [],
     });
     global.chrome.storage = { local: mockStorage };
@@ -1709,7 +1741,13 @@ test("Warning #4: clearBadge helper and badge state reset on SYNC_VAULT success"
     const originalFetch = global.fetch;
     global.fetch = async (url) => {
       if (url.includes("/vault-clear-badge?alt=media")) {
-        return { ok: true, text: async () => JSON.stringify({ series: { "Solo Leveling": { chapter: "10" } } }) };
+        return {
+          ok: true,
+          text: async () =>
+            JSON.stringify({
+              series: { "solo leveling": { chapter: "10", title: "Solo Leveling", site: "" } },
+            }),
+        };
       }
       return { ok: true, json: async () => ({}) };
     };
@@ -1728,3 +1766,238 @@ test("Warning #4: clearBadge helper and badge state reset on SYNC_VAULT success"
     delete global.chrome;
   }
 });
+
+test("Phase 3 (AC-1, AC-2, AM-3): normalizeSeriesKey and isValidMangaName reject mixed-case reserved keys and normalize valid slugs", () => {
+  assert.equal(normalizeSeriesKey("  Solo Leveling  "), "solo leveling");
+  assert.equal(normalizeSeriesKey("Omniscient Reader's Viewpoint"), "omniscient reader's viewpoint");
+  assert.equal(normalizeSeriesKey(""), null);
+  assert.equal(normalizeSeriesKey("   "), null);
+  assert.equal(normalizeSeriesKey(null), null);
+  assert.equal(normalizeSeriesKey(undefined), null);
+
+  for (const reserved of [
+    "__proto__",
+    "__PROTO__",
+    "  __Proto__ ",
+    "constructor",
+    "CONSTRUCTOR",
+    " Constructor ",
+    "prototype",
+    "PROTOTYPE",
+    " Prototype ",
+  ]) {
+    assert.equal(isValidMangaName(reserved), false, `Must reject reserved key: ${reserved}`);
+    assert.equal(normalizeSeriesKey(reserved), null, `normalizeSeriesKey must return null for: ${reserved}`);
+  }
+});
+
+test("Phase 3 (AC-3, AC-4): SYNC_CHAPTER stores { chapter, url, title, site, updated } under normalized key and preserves display title across sites", async () => {
+  const originalFetch = global.fetch;
+  const mockStorage = createMockStorage({
+    fileId: "vault-phase3-shape",
+    series: {},
+    pending_sync: [],
+  });
+
+  try {
+    global.chrome = {
+      action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+      storage: { local: mockStorage },
+      identity: { getAuthToken: async () => ({ token: "tok-phase3" }) },
+    };
+
+    let driveVault = { series: {} };
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-phase3-shape?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify(driveVault) };
+      }
+      if (opts?.method === "PATCH") {
+        driveVault = JSON.parse(opts.body);
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    // 1. First read on MangaDex with mixed-case DOM title
+    handleMessage({
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "Solo Leveling",
+        chapter: "150",
+        url: "https://mangadex.org/chapter/abc-150",
+        site: "mangadex.org",
+      },
+    });
+    await enqueueOperation(async () => {});
+
+    let store = mockStorage.getStore();
+    const entry1 = store.series["solo leveling"];
+    assert.ok(entry1, "Must be stored under lowercase slug key");
+    assert.equal(entry1.chapter, "150");
+    assert.equal(entry1.url, "https://mangadex.org/chapter/abc-150");
+    assert.equal(entry1.title, "Solo Leveling");
+    assert.equal(entry1.site, "mangadex.org");
+    assert.ok(!Number.isNaN(Date.parse(entry1.updated)), "Must include valid ISO updated timestamp");
+
+    // 2. Second read on Asura where URL slug extraction yields lowercase 'solo leveling'
+    handleMessage({
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "solo leveling",
+        chapter: "151",
+        url: "https://asuracomic.net/series/solo-leveling/chapter/151",
+        site: "asuracomic.net",
+      },
+    });
+    await enqueueOperation(async () => {});
+
+    store = mockStorage.getStore();
+    assert.equal(Object.keys(store.series).length, 1, "Must update existing normalized key without creating duplicate");
+    const entry2 = store.series["solo leveling"];
+    assert.equal(entry2.chapter, "151");
+    assert.equal(entry2.title, "Solo Leveling", "Must preserve mixed-case display title when updated by lowercase slug extractor");
+    assert.equal(entry2.site, "asuracomic.net");
+    assert.equal(driveVault.series["solo leveling"].title, "Solo Leveling");
+    assert.equal(driveVault.series["solo leveling"].chapter, "151");
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("Phase 3 (AC-5, AC-6, AC-7): migrateSeriesMap normalizes legacy keys, resolves LWW duplicates, skips invalid keys, and is idempotent", () => {
+  const rawLegacy = {
+    "Solo Leveling": {
+      chapter: "100",
+      url: "https://mangadex.org/chapter/100",
+      updated: "2026-11-20T10:00:00Z",
+    },
+    "  solo leveling ": {
+      chapter: "105",
+      url: "https://asuracomic.net/series/solo-leveling/chapter/105",
+      updated: "2026-11-21T12:00:00Z",
+    },
+    "SOLO LEVELING": {
+      chapter: "999",
+      url: "https://asuracomic.net/series/solo-leveling/chapter/999",
+      updated: "invalid-timestamp",
+    },
+    "Nano Machine": {
+      chapter: "215",
+      url: "https://kunmanga.com/manga/nano-machine/chapter-215/",
+    },
+    "__PROTO__": {
+      chapter: "1",
+      url: "https://evil.com",
+    },
+    "   ": {
+      chapter: "1",
+    },
+  };
+
+  const firstPass = migrateSeriesMap(rawLegacy);
+  assert.equal(firstPass.changed, true, "First pass over legacy keys must report changed: true");
+  assert.deepEqual(Object.keys(firstPass.series).sort(), ["nano machine", "solo leveling"]);
+
+  // LWW check: valid 2026-11-21 beats valid 2026-11-20 AND beats invalid timestamp even with chapter 999
+  assert.equal(firstPass.series["solo leveling"].chapter, "105");
+  assert.equal(firstPass.series["solo leveling"].updated, "2026-11-21T12:00:00Z");
+  assert.equal(firstPass.series["solo leveling"].title, "Solo Leveling", "Must preserve mixed-case display title");
+  assert.equal(firstPass.series["solo leveling"].site, "asuracomic.net", "Must derive site from winning URL hostname");
+
+  // Missing site & title populated on Nano Machine
+  assert.equal(firstPass.series["nano machine"].title, "Nano Machine");
+  assert.equal(firstPass.series["nano machine"].site, "kunmanga.com");
+
+  // Idempotency check (AC-7)
+  const secondPass = migrateSeriesMap(firstPass.series);
+  assert.equal(secondPass.changed, false, "Second pass on already-normalized series map must report changed: false");
+  assert.deepEqual(secondPass.series, firstPass.series);
+});
+
+test("Phase 3 (AC-5, AC-7, AM-2): empty-queue reconcileAndSync migrates legacy local & remote entries via LWW and avoids redundant writes on second run", async () => {
+  const originalFetch = global.fetch;
+  let patchCount = 0;
+  let setCount = 0;
+
+  const mockStorage = createMockStorage({
+    fileId: "vault-lww-idempotent",
+    series: {
+      "Solo Leveling": {
+        chapter: "160",
+        url: "https://asuracomic.net/series/solo-leveling/chapter/160",
+        updated: "2026-11-22T05:00:00Z", // Newer than Drive
+      },
+    },
+    pending_sync: [],
+  });
+
+  const origSet = mockStorage.set;
+  mockStorage.set = (items, cb) => {
+    setCount++;
+    return origSet(items, cb);
+  };
+
+  let remoteDriveData = {
+    series: {
+      "solo leveling": {
+        chapter: "150",
+        url: "https://mangadex.org/chapter/150",
+        updated: "2026-11-21T00:00:00Z", // Older than local
+      },
+      "Tower of God": {
+        chapter: "600",
+        url: "https://www.mangahere.cc/manga/tower_of_god/c600/",
+        updated: "2026-11-20T00:00:00Z",
+      },
+    },
+  };
+
+  try {
+    global.chrome = {
+      action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+      storage: { local: mockStorage },
+      identity: { getAuthToken: async () => ({ token: "tok-lww" }) },
+    };
+
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-lww-idempotent?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify(remoteDriveData) };
+      }
+      if (opts?.method === "PATCH") {
+        patchCount++;
+        remoteDriveData = JSON.parse(opts.body);
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    // 1st run: migrates legacy keys and merges local newer Ch. 160 over remote Ch. 150
+    const res1 = await reconcileAndSync({ interactive: false });
+    assert.equal(res1.status, "success");
+    assert.equal(patchCount, 1, "First run must patch Drive with migrated & LWW-merged vault");
+    assert.equal(setCount, 1, "First run must update chrome.storage.local");
+    assert.equal(res1.series["solo leveling"].chapter, "160", "Newer local LWW entry must win over older remote entry");
+    assert.equal(res1.series["solo leveling"].title, "Solo Leveling");
+    assert.equal(res1.series["tower of god"].chapter, "600");
+    assert.equal(res1.series["tower of god"].title, "Tower of God");
+    assert.equal(res1.series["tower of god"].site, "mangahere.cc");
+
+    // 2nd run on already-normalized, already-synced state: zero redundant Drive PATCH or storage writes (AC-7)
+    patchCount = 0;
+    setCount = 0;
+    const res2 = await reconcileAndSync({ interactive: false });
+    assert.equal(res2.status, "success");
+    assert.equal(patchCount, 0, "Idempotent second run must not trigger redundant Drive PATCH");
+    assert.equal(setCount, 0, "Idempotent second run must not trigger redundant chrome.storage.local write");
+
+    // Also verify migrateStorageSchema is a no-op when already migrated
+    const migRes = await migrateStorageSchema();
+    assert.equal(migRes.migrated, false);
+    assert.equal(setCount, 0);
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+

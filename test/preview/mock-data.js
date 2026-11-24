@@ -2,39 +2,45 @@
 const MOCK_DATASETS = {
   default: {
     series: {
-      "Solo Leveling": {
+      "solo leveling": {
+        title: "Solo Leveling",
         chapter: "179",
-        site: "asura",
+        site: "asuracomic.net",
         url: "https://asuracomic.net/series/solo-leveling/chapter/179",
         updated: new Date(Date.now() - 1000 * 60 * 30).toISOString() // 30 mins ago
       },
-      "Chainsaw Man": {
+      "chainsaw man": {
+        title: "Chainsaw Man",
         chapter: "165",
-        site: "mangaplus",
+        site: "mangaplus.shueisha.co.jp",
         url: "https://mangaplus.shueisha.co.jp/viewer/1020000",
         updated: new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString() // 4 hours ago
       },
-      "Omniscient Reader's Viewpoint": {
+      "omniscient reader's viewpoint": {
+        title: "Omniscient Reader's Viewpoint",
         chapter: "210.5",
-        site: "asura",
+        site: "asuracomic.net",
         url: "https://asuracomic.net/series/omniscient-reader/chapter/210.5",
         updated: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString() // 1 day ago
       },
-      "Frieren: Beyond Journey's End": {
+      "frieren: beyond journey's end": {
+        title: "Frieren: Beyond Journey's End",
         chapter: "130",
-        site: "mangadex",
+        site: "mangadex.org",
         url: "https://mangadex.org/chapter/12345",
         updated: new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString() // 2 days ago
       },
-      "One Piece": {
-        chapter: "1125",
-        site: "mangaplus",
-        url: "https://mangaplus.shueisha.co.jp/viewer/1030000",
+      "nano machine": {
+        title: "Nano Machine",
+        chapter: "215",
+        site: "kunmanga.com",
+        url: "https://kunmanga.com/manga/nano-machine/chapter-215/",
         updated: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString() // 3 days ago
       },
-      "Tower of God": {
+      "tower of god": {
+        title: "Tower of God",
         chapter: "600",
-        site: "mangahere",
+        site: "mangahere.cc",
         url: "https://www.mangahere.cc/manga/tower_of_god/c600/",
         updated: new Date(Date.now() - 1000 * 60 * 60 * 120).toISOString() // 5 days ago
       }
@@ -46,10 +52,12 @@ const MOCK_DATASETS = {
   large: {
     series: (() => {
       const s = {};
-      const sites = ["asura", "mangadex", "mangaplus", "mangahere"];
+      const sites = ["asura", "mangadex", "mangaplus", "mangahere", "kunmanga"];
       for (let i = 1; i <= 25; i++) {
         const site = sites[i % sites.length];
-        s[`Manga Series Title ${i}`] = {
+        const title = `Manga Series Title ${i}`;
+        s[title.toLowerCase()] = {
+          title: title,
           chapter: `${100 + i}`,
           site: site,
           url: `https://example.com/${site}/series-${i}/chapter/${100 + i}`,

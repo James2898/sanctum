@@ -96,11 +96,20 @@
       sendMessage: (message, callback) => {
         console.log("[Sanctum Preview] chrome.runtime.sendMessage:", message);
         if (message && message.type === "DELETE_SERIES") {
-          const mangaName = message.payload?.manga;
-          if (mangaName && currentVault.series[mangaName]) {
-            delete currentVault.series[mangaName];
-            delete mockStorage.series[mangaName];
-            console.log(`[Sanctum Preview] Deleted "${mangaName}" from mock vault.`);
+          const rawManga = message.payload?.manga;
+          const slug = typeof rawManga === "string" ? rawManga.toLowerCase().trim() : "";
+          if (slug && currentVault.series) {
+            for (const key of Object.keys(currentVault.series)) {
+              if (key.toLowerCase().trim() === slug) {
+                delete currentVault.series[key];
+              }
+            }
+            for (const key of Object.keys(mockStorage.series || {})) {
+              if (key.toLowerCase().trim() === slug) {
+                delete mockStorage.series[key];
+              }
+            }
+            console.log(`[Sanctum Preview] Deleted "${slug}" from mock vault.`);
           }
           if (typeof callback === "function") {
             setTimeout(() => callback({ status: "success" }), 100);
