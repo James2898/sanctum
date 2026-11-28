@@ -726,11 +726,8 @@ async function reconcileAndSync(opts = {}) {
             typeof mut.payload?.title === "string" && mut.payload.title.trim()
               ? mut.payload.title.trim()
               : "";
-          const mTitle =
-            explicitTitle ||
-            (trimmedRaw !== slug ? trimmedRaw : "") ||
-            saved?.title ||
-            trimmedRaw;
+          const candidateTitle = pickPreferredTitle(explicitTitle, trimmedRaw, slug);
+          const mTitle = pickPreferredTitle(candidateTitle, saved?.title, slug);
           const mSite = deriveSite(mut.payload?.site, mUrl) || saved?.site || "";
 
           if (!saved || shouldUpdateProgress(mChapter, mTime, saved.chapter, saved.updated)) {
@@ -839,11 +836,8 @@ function handleMessage(message, sender, sendResponse) {
           typeof message.payload?.title === "string" && message.payload.title.trim()
             ? message.payload.title.trim()
             : "";
-        const resolvedTitle =
-          explicitTitle ||
-          (displayName !== slug ? displayName : "") ||
-          savedEntry?.title ||
-          displayName;
+        const candidateTitle = pickPreferredTitle(explicitTitle, displayName, slug);
+        const resolvedTitle = pickPreferredTitle(candidateTitle, savedEntry?.title, slug);
         const resolvedSite = deriveSite(message.payload?.site, newUrl) || savedEntry?.site || "";
 
         // 2. Optimistic local cache update
@@ -1074,6 +1068,7 @@ if (typeof module !== "undefined" && module.exports) {
     isValidMangaName,
     normalizeSeriesKey,
     deriveSite,
+    pickPreferredTitle,
     mergeDuplicateSeriesEntries,
     migrateSeriesMap,
     reconcileSeriesMaps,

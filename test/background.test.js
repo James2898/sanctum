@@ -17,6 +17,7 @@ const {
   isValidMangaName,
   normalizeSeriesKey,
   deriveSite,
+  pickPreferredTitle,
   mergeDuplicateSeriesEntries,
   migrateSeriesMap,
   reconcileSeriesMaps,
@@ -1995,6 +1996,460 @@ test("Phase 3 (AC-5, AC-7, AM-2): empty-queue reconcileAndSync migrates legacy l
     const migRes = await migrateStorageSchema();
     assert.equal(migRes.migrated, false);
     assert.equal(setCount, 0);
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("Phase 4: compareChapterParts handles integers, decimals, fractions, and monotonic ordering", () => {
+  // Integer ordering
+  assert.equal(compareChapterParts([10], [10]), 0);
+  assert.equal(compareChapterParts([9], [10]), -1);
+  assert.equal(compareChapterParts([11], [10]), 1);
+  assert.equal(compareChapterParts([0], [0]), 0);
+  assert.equal(compareChapterParts([0], [1]), -1);
+
+  // Decimal ordering
+  assert.equal(compareChapterParts([10.5], [10]), 1);
+  assert.equal(compareChapterParts([10.5], [10.5]), 0);
+  assert.equal(compareChapterParts([10.5], [10.6]), -1);
+  assert.equal(compareChapterParts([0], [0.5]), -1);
+
+  // Multi-part fractional ordering (e.g. 12-1 vs 12 vs 12-2 vs 12-1-3)
+  assert.equal(compareChapterParts([12, 1], [12]), 1);
+  assert.equal(compareChapterParts([12], [12, 1]), -1);
+  assert.equal(compareChapterParts([12], [12, 0]), 0);
+  assert.equal(compareChapterParts([12, 1], [12, 2]), -1);
+  assert.equal(compareChapterParts([12, 2], [12, 1]), 1);
+  assert.equal(compareChapterParts([12, 1, 3], [12, 1, 2]), 1);
+  assert.equal(compareChapterParts([13], [12, 99]), 1);
+
+  // Monotonic progression sequence
+  const parsed = ["0", "1", "12", "12-1", "12-1-2", "12-2", "12.5", "13"].map(
+    (ch) => parseChapter(ch).value,
+  );
+  for (let i = 1; i < parsed.length; i++) {
+    assert.equal(
+      compareChapterParts(parsed[i], parsed[i - 1]),
+      1,
+      `Expected chapter index ${i} to be strictly greater than ${i - 1}`,
+    );
+  }
+});
+
+test("Phase 4: pickPreferredTitle preserves mixed-case DOM titles over lowercase slugs and handles fallbacks", () => {
+  // Lowercase slug incoming with mixed-case saved -> preserves mixed-case
+  assert.equal(
+    pickPreferredTitle("solo leveling", "Solo Leveling", "solo leveling"),
+    "Solo Leveling",
+  );
+  assert.equal(
+    pickPreferredTitle("  tower of god  ", "Tower of God", "tower of god"),
+    "Tower of God",
+  );
+
+  // Mixed-case incoming with lowercase saved -> upgrades to mixed-case
+  assert.equal(
+    pickPreferredTitle("Solo Leveling", "solo leveling", "solo leveling"),
+    "Solo Leveling",
+  );
+
+  // Distinct mixed-case primary wins over secondary
+  assert.equal(
+    pickPreferredTitle("Solo Leveling: Arise", "Solo Leveling", "solo leveling"),
+    "Solo Leveling: Arise",
+  );
+
+  // Empty/whitespace/non-string fallbacks
+  assert.equal(pickPreferredTitle("", "Solo Leveling", "solo leveling"), "Solo Leveling");
+  assert.equal(pickPreferredTitle("   ", "Solo Leveling", "solo leveling"), "Solo Leveling");
+  assert.equal(pickPreferredTitle(null, "Solo Leveling", "solo leveling"), "Solo Leveling");
+  assert.equal(pickPreferredTitle("", "", "solo leveling"), "solo leveling");
+  assert.equal(pickPreferredTitle(undefined, null, "nano machine"), "nano machine");
+  assert.equal(pickPreferredTitle("Nano Machine", "", "nano machine"), "Nano Machine");
+});
+
+test("Phase 4: mergeDuplicateSeriesEntries resolves LWW timestamps, chapter ties, title survivorship, and fallbacks", () => {
+  // Newer valid timestamp wins, but preserves mixed-case title from older entry
+  const mergedNewer = mergeDuplicateSeriesEntries(
+    {
+      chapter: "150",
+      title: "Solo Leveling",
+      site: "mangadex.org",
+      url: "https://mangadex.org/chapter/150",
+      updated: "2026-11-20T10:00:00Z",
+    },
+    {
+      chapter: "151",
+      title: "solo leveling",
+      site: "asuracomic.net",
+      url: "https://asuracomic.net/series/solo-leveling/chapter/151",
+      updated: "2026-11-21T10:00:00Z",
+    },
+    "solo leveling",
+  );
+  assert.equal(mergedNewer.chapter, "151");
+  assert.equal(mergedNewer.title, "Solo Leveling");
+  assert.equal(mergedNewer.site, "asuracomic.net");
+  assert.equal(mergedNewer.updated, "2026-11-21T10:00:00Z");
+
+  // Valid timestamp beats invalid timestamp even if invalid entry has higher chapter
+  const mergedValidWins = mergeDuplicateSeriesEntries(
+    {
+      chapter: "100",
+      title: "Nano Machine",
+      site: "kunmanga.com",
+      url: "https://kunmanga.com/manga/nano-machine/chapter-100/",
+      updated: "2026-11-20T10:00:00Z",
+    },
+    {
+      chapter: "999",
+      title: "nano machine",
+      site: "asurascans.com",
+      updated: "not-a-date",
+    },
+    "nano machine",
+  );
+  assert.equal(mergedValidWins.chapter, "100");
+  assert.equal(mergedValidWins.updated, "2026-11-20T10:00:00Z");
+
+  // Equal timestamps fall back to monotonic chapter comparison and preserve missing url/site from loser
+  const mergedTieBreak = mergeDuplicateSeriesEntries(
+    {
+      chapter: "12-1",
+      title: "tower of god",
+      site: "mangahere.cc",
+      url: "https://www.mangahere.cc/manga/tower_of_god/c12.1/",
+      updated: "2026-11-20T10:00:00Z",
+    },
+    {
+      chapter: "12-2",
+      title: "Tower of God",
+      site: "",
+      updated: "2026-11-20T10:00:00Z",
+    },
+    "tower of god",
+  );
+  assert.equal(mergedTieBreak.chapter, "12-2");
+  assert.equal(mergedTieBreak.title, "Tower of God");
+  assert.equal(mergedTieBreak.site, "mangahere.cc", "Must fall back to loser site when winner site is empty");
+  assert.equal(
+    mergedTieBreak.url,
+    "https://www.mangahere.cc/manga/tower_of_god/c12.1/",
+    "Must fall back to loser url when winner url is undefined",
+  );
+});
+
+test("Phase 4: reconcileSeriesMaps merges local and remote maps via LWW + monotonic tie-break and tracks remoteChanged", () => {
+  const remote = {
+    "solo leveling": {
+      chapter: "150",
+      title: "Solo Leveling",
+      site: "mangadex.org",
+      url: "https://mangadex.org/chapter/150",
+      updated: "2026-11-20T10:00:00Z",
+    },
+    "one piece": {
+      chapter: "1130",
+      title: "One Piece",
+      site: "mangaplus.shueisha.co.jp",
+      url: "https://mangaplus.shueisha.co.jp/viewer/1021456",
+      updated: "2026-11-21T10:00:00Z",
+    },
+  };
+
+  // Identical local map -> remoteChanged must be false
+  const noOp = reconcileSeriesMaps(remote, {
+    "solo leveling": { ...remote["solo leveling"] },
+  });
+  assert.equal(noOp.remoteChanged, false);
+  assert.deepEqual(noOp.series, remote);
+
+  // Local has a newer update for solo leveling (lowercase slug title) and a brand-new local-only series
+  const local = {
+    "solo leveling": {
+      chapter: "152",
+      title: "solo leveling",
+      site: "asurascans.com",
+      url: "https://asurascans.com/series/solo-leveling/chapter/152",
+      updated: "2026-11-22T12:00:00Z",
+    },
+    "nano machine": {
+      chapter: "215",
+      title: "nano machine",
+      site: "kunmanga.com",
+      url: "https://kunmanga.com/manga/nano-machine/chapter-215/",
+      updated: "2026-11-22T13:00:00Z",
+    },
+  };
+
+  const merged = reconcileSeriesMaps(remote, local);
+  assert.equal(merged.remoteChanged, true);
+  assert.equal(merged.series["solo leveling"].chapter, "152");
+  assert.equal(merged.series["solo leveling"].title, "Solo Leveling", "Must preserve mixed-case remote title");
+  assert.equal(merged.series["solo leveling"].site, "asurascans.com");
+  assert.equal(merged.series["one piece"].chapter, "1130", "Must retain remote-only entries");
+  assert.equal(merged.series["nano machine"].chapter, "215", "Must add local-only entries");
+});
+
+test("BUG-009 (SYNC_CHAPTER): lowercase URL-slug extractors preserve mixed-case saved.title across fresh/warm cache & Drive, while mixed-case upgrades lowercase", async () => {
+  const originalFetch = global.fetch;
+
+  // Scenario A: Fresh/empty local cache while Google Drive already holds mixed-case "Solo Leveling" from MangaDex
+  let driveVault = {
+    series: {
+      "solo leveling": {
+        chapter: "150",
+        title: "Solo Leveling",
+        site: "mangadex.org",
+        url: "https://mangadex.org/chapter/150",
+        updated: "2026-11-20T10:00:00Z",
+      },
+      "tower of god": {
+        chapter: "500",
+        title: "tower of god",
+        site: "mangahere.cc",
+        url: "https://www.mangahere.cc/manga/tower_of_god/c500/",
+        updated: "2026-11-20T10:00:00Z",
+      },
+    },
+  };
+
+  const mockStorage = createMockStorage({
+    fileId: "vault-bug-009-sync",
+    series: {}, // Fresh cache — simulates second device or cleared local cache
+    pending_sync: [],
+  });
+
+  try {
+    global.chrome = {
+      action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+      storage: { local: mockStorage },
+      identity: { getAuthToken: async () => ({ token: "tok-bug-009" }) },
+    };
+
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-bug-009-sync?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify(driveVault) };
+      }
+      if (opts?.method === "PATCH") {
+        driveVault = JSON.parse(opts.body);
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    // 1. Fresh cache sync from Asura (lowercase slug) -> Drive & hydrated local cache must preserve "Solo Leveling"
+    handleMessage({
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "solo leveling",
+        chapter: "151",
+        url: "https://asuracomic.net/series/solo-leveling/chapter/151",
+        site: "asuracomic.net",
+      },
+    });
+    await enqueueOperation(async () => {});
+
+    assert.equal(driveVault.series["solo leveling"].chapter, "151");
+    assert.equal(
+      driveVault.series["solo leveling"].title,
+      "Solo Leveling",
+      "Fresh-cache Asura sync must NOT overwrite Drive mixed-case title with lowercase slug",
+    );
+    assert.equal(
+      mockStorage.getStore().series["solo leveling"].title,
+      "Solo Leveling",
+      "Hydrated local cache must reflect preserved mixed-case title",
+    );
+
+    // 2. Warm cache sync from Kunmanga WITH explicit lowercase title -> must still preserve "Solo Leveling"
+    handleMessage({
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "solo leveling",
+        title: "solo leveling",
+        chapter: "152",
+        url: "https://kunmanga.com/manga/solo-leveling/chapter-152/",
+        site: "kunmanga.com",
+      },
+    });
+    await enqueueOperation(async () => {});
+
+    assert.equal(driveVault.series["solo leveling"].chapter, "152");
+    assert.equal(driveVault.series["solo leveling"].title, "Solo Leveling");
+    assert.equal(mockStorage.getStore().series["solo leveling"].title, "Solo Leveling");
+
+    // 3. Warm cache sync from MangaHere (lowercase) -> must still preserve "Solo Leveling"
+    handleMessage({
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "solo leveling",
+        chapter: "153",
+        url: "https://www.mangahere.cc/manga/solo_leveling/c153/",
+        site: "mangahere.cc",
+      },
+    });
+    await enqueueOperation(async () => {});
+
+    assert.equal(driveVault.series["solo leveling"].chapter, "153");
+    assert.equal(driveVault.series["solo leveling"].title, "Solo Leveling");
+
+    // 4. Mixed-case sync from MangaPlus upgrades existing lowercase "tower of god" -> "Tower of God"
+    handleMessage({
+      type: "SYNC_CHAPTER",
+      payload: {
+        manga: "Tower of God",
+        chapter: 501,
+        url: "https://mangaplus.shueisha.co.jp/viewer/999001",
+        site: "mangaplus.shueisha.co.jp",
+      },
+    });
+    await enqueueOperation(async () => {});
+
+    assert.equal(driveVault.series["tower of god"].chapter, 501);
+    assert.equal(
+      driveVault.series["tower of god"].title,
+      "Tower of God",
+      "Mixed-case DOM extractor must upgrade lowercase saved title",
+    );
+    assert.equal(mockStorage.getStore().series["tower of god"].title, "Tower of God");
+
+    // 5. Prototype-key safety (BUG-006) remains intact
+    let rejectedResponse = null;
+    handleMessage(
+      {
+        type: "SYNC_CHAPTER",
+        payload: { manga: "constructor", chapter: "1", url: "https://kunmanga.com/manga/x/chapter-1/" },
+      },
+      null,
+      (res) => {
+        rejectedResponse = res;
+      },
+    );
+    await enqueueOperation(async () => {});
+    assert.deepEqual(rejectedResponse, { status: "ignored", reason: "invalid_manga_name" });
+    assert.equal(Object.hasOwn(driveVault.series, "constructor"), false);
+  } finally {
+    delete global.chrome;
+    global.fetch = originalFetch;
+  }
+});
+
+test("BUG-009 (reconcileAndSync queue replay): preserves mixed-case saved.title, upgrades lowercase titles, guards prototype keys, and preserves re-entrancy prefix draining", async () => {
+  const originalFetch = global.fetch;
+
+  let driveVault = {
+    series: {
+      "solo leveling": {
+        chapter: "100",
+        title: "Solo Leveling",
+        site: "mangaplus.shueisha.co.jp",
+        url: "https://mangaplus.shueisha.co.jp/viewer/100",
+        updated: "2026-11-20T00:00:00Z",
+      },
+      "nano machine": {
+        chapter: "200",
+        title: "nano machine",
+        site: "asurascans.com",
+        url: "https://asurascans.com/series/nano-machine/chapter/200",
+        updated: "2026-11-20T00:00:00Z",
+      },
+    },
+  };
+
+  const mockStorage = createMockStorage({
+    fileId: "vault-bug-009-queue",
+    series: {},
+    pending_sync: [
+      {
+        type: "SYNC_CHAPTER",
+        payload: {
+          manga: "solo leveling",
+          title: "solo leveling",
+          chapter: "101",
+          url: "https://kunmanga.com/manga/solo-leveling/chapter-101/",
+          site: "kunmanga.com",
+        },
+        timestamp: "2026-11-21T01:00:00Z",
+      },
+      {
+        type: "SYNC_CHAPTER",
+        payload: {
+          manga: "nano machine",
+          title: "Nano Machine",
+          chapter: "201",
+          url: "https://mangadex.org/chapter/nm-201",
+          site: "mangadex.org",
+        },
+        timestamp: "2026-11-21T02:00:00Z",
+      },
+      {
+        type: "SYNC_CHAPTER",
+        payload: {
+          manga: "__proto__",
+          title: "Evil",
+          chapter: "999",
+          url: "https://evil.example/ch/999",
+          site: "evil.example",
+        },
+        timestamp: "2026-11-21T03:00:00Z",
+      },
+    ],
+  });
+
+  const midFlightMutation = {
+    type: "SYNC_CHAPTER",
+    payload: {
+      manga: "solo leveling",
+      title: "solo leveling",
+      chapter: "102",
+      url: "https://www.mangahere.cc/manga/solo_leveling/c102/",
+      site: "mangahere.cc",
+    },
+    timestamp: "2026-11-21T04:00:00Z",
+  };
+
+  try {
+    global.chrome = {
+      action: { setBadgeText: () => {}, setBadgeBackgroundColor: () => {} },
+      storage: { local: mockStorage },
+      identity: { getAuthToken: async () => ({ token: "tok-queue-009" }) },
+    };
+
+    global.fetch = async (url, opts) => {
+      if (url.includes("/vault-bug-009-queue?alt=media")) {
+        return { ok: true, text: async () => JSON.stringify(driveVault) };
+      }
+      if (opts?.method === "PATCH") {
+        // Simulate a concurrent offline mutation appended mid-flight before PATCH completes (BUG-008)
+        const currentStore = mockStorage.getStore();
+        currentStore.pending_sync = [...currentStore.pending_sync, midFlightMutation];
+        driveVault = JSON.parse(opts.body);
+        return { ok: true };
+      }
+      return { ok: true, json: async () => ({}) };
+    };
+
+    const res = await reconcileAndSync({ interactive: false });
+    assert.equal(res.status, "success");
+
+    // Queued lowercase sync from kunmanga must preserve mixed-case "Solo Leveling"
+    assert.equal(driveVault.series["solo leveling"].chapter, "101");
+    assert.equal(driveVault.series["solo leveling"].title, "Solo Leveling");
+    assert.equal(driveVault.series["solo leveling"].site, "kunmanga.com");
+
+    // Queued mixed-case sync from mangadex must upgrade lowercase "nano machine" -> "Nano Machine"
+    assert.equal(driveVault.series["nano machine"].chapter, "201");
+    assert.equal(driveVault.series["nano machine"].title, "Nano Machine");
+    assert.equal(driveVault.series["nano machine"].site, "mangadex.org");
+
+    // Prototype key rejected (BUG-006)
+    assert.equal(Object.hasOwn(driveVault.series, "__proto__"), false);
+
+    // Re-entrancy prefix draining preserved the mid-flight mutation (BUG-008 / AM-2)
+    assert.deepEqual(mockStorage.getStore().pending_sync, [midFlightMutation]);
   } finally {
     delete global.chrome;
     global.fetch = originalFetch;
