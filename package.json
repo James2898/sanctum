@@ -1,0 +1,15 @@
+{
+  "name": "sanctum",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Privacy-first manga history sync Chrome Extension (Manifest V3) backed by personal Google Drive.",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}

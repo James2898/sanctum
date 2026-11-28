@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - feature/architecture/industry-grade-upgrade
+  pull_request:
+    branches:
+      - main
+      - feature/architecture/industry-grade-upgrade
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-validate:
+    name: Test & Validate MV3 (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["20.x", "22.x"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Verify zero npm dependencies
+        run: >
+          node -e 'const pkg = require("./package.json");
+          const deps = Object.keys(pkg.dependencies || {});
+          const devDeps = Object.keys(pkg.devDependencies || {});
+          if (deps.length > 0 || devDeps.length > 0) {
+          console.error("Zero-dependency policy violated:", { deps, devDeps });
+          process.exit(1);
+          }
+          console.log("Zero external dependencies verified.");'
+
+      - name: Run unit test suite
+        run: npm test
+
+      - name: Validate Manifest V3 schemas and assets
+        run: node scripts/validate-manifest.js

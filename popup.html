@@ -2,14 +2,19 @@
 <html>
   <head>
     <style>
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        width: 350px;
+        width: 380px;
         background: #0f0f0f;
         color: #efefef;
         font-family: "Segoe UI", sans-serif;
         margin: 0;
         padding: 15px;
         min-height: 35rem;
+        overflow-x: hidden;
       }
 
       h2 {
@@ -35,6 +40,31 @@
       .header-icon {
         width: 24px;
         height: 24px;
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      #sort-btn {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 4px;
+        color: #efefef;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 8px;
+        transition:
+          border-color 0.2s,
+          color 0.2s;
+      }
+
+      #sort-btn:hover {
+        border-color: #7d42ff;
+        color: #7d42ff;
       }
 
       #refresh-btn {
@@ -116,6 +146,7 @@
         justify-content: center;
         gap: 8px;
         margin-bottom: 10px;
+        flex-wrap: wrap;
       }
 
       #filter-container label {
@@ -150,27 +181,12 @@
         margin-bottom: 4px;
         display: block;
       }
-      .no-cover {
-        text-decoration: underline dashed #7d42ff;
-      }
       .manga-info {
         font-size: 12px;
         color: #aaa;
         display: flex;
         justify-content: space-between;
         align-items: center;
-      }
-      #manga-preview {
-        display: none;
-        position: fixed;
-        pointer-events: none;
-        z-index: 9999;
-      }
-      #preview-img {
-        width: 150px;
-        border-radius: 8px;
-        border: 2px solid #7d42ff;
-        display: block;
       }
       .btn-read {
         color: white;
@@ -244,9 +260,14 @@
         />
         <h2>Sanctum Vault</h2>
       </div>
-      <button id="refresh-btn">
-        <img src="refresh.svg" />
-      </button>
+      <div class="header-actions">
+        <button id="sort-btn" type="button" title="Toggle sort order">
+          Recently Read
+        </button>
+        <button id="refresh-btn">
+          <img src="refresh.svg" />
+        </button>
+      </div>
     </div>
     <div id="search-container">
       <input id="search-field" type="text" />
@@ -266,6 +287,9 @@
       <label
         ><input type="radio" value="mangaplus" name="filter" />Mangaplus</label
       >
+      <label
+        ><input type="radio" value="kunmanga" name="filter" />Kunmanga</label
+      >
     </div>
     <div id="loading">
       <img src="refresh.svg" class="spinning" />
@@ -274,9 +298,6 @@
     <div id="list" class="series-list"></div>
     <div class="status" id="status">Syncing with Google Drive...</div>
 
-    <div id="manga-preview">
-      <img id="preview-img" alt="Cover Preview" />
-    </div>
     <script src="popup.js"></script>
   </body>
 </html>
