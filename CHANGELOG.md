@@ -2,6 +2,27 @@
 
 All notable changes to the Sanctum Chrome extension will be documented in this file.
 
+## [Unreleased] — 2026-11-28
+
+### Added
+- Implement Phase 4 OAuth credential hygiene, zero-dependency test harness, automated CI, MV3 validation, test coverage closure, and documentation overhaul (`TASK-20261128-c4y`)
+  - Created sanitized `manifest.example.json` mirroring `manifest.json` with placeholder `key` (`"YOUR_EXTENSION_PUBLIC_KEY_HERE"`) and `oauth2.client_id` (`"YOUR_GOOGLE_CLIENT_ID_HERE.apps.googleusercontent.com"`), leaving tracked `manifest.json` unmodified.
+  - Added zero-dependency CommonJS `package.json` (`"type": "commonjs"`, `"scripts": { "test": "node --test test/*.test.js" }`, `"engines": { "node": ">=20" }`, empty `dependencies` and `devDependencies`), naturally excluding `test/preview/` harness files.
+  - Added standalone zero-dependency MV3 validator (`scripts/validate-manifest.js`) checking JSON syntax, MV3 schema/version rules, disk existence of referenced assets, credential placeholders, and non-credential parity against `manifest.json`.
+  - Added GitHub Actions workflow (`.github/workflows/ci.yml`) running on `push` and `pull_request` (`main`, `feature/architecture/industry-grade-upgrade`) with `contents: read`, Node `20.x`/`22.x` LTS matrix, zero-dependency gate, `npm test`, and `node scripts/validate-manifest.js`.
+  - Closed Phase 4 unit test coverage gaps across `test/content.test.js` (`mangahere.cc`, `kunmanga.com`, `mangadex.org`, `mangaplus.shueisha.co.jp`, `asurascans.com`) and `test/background.test.js` (`compareChapterParts`, `pickPreferredTitle`, `mergeDuplicateSeriesEntries`, `reconcileSeriesMaps`, and `BUG-009` cross-site survivorship in `SYNC_CHAPTER` and `reconcileAndSync()`), reaching 75/75 passing tests.
+  - Affected files: `manifest.example.json`, `package.json`, `scripts/validate-manifest.js`, `.github/workflows/ci.yml`, `test/content.test.js`, `test/background.test.js`
+
+### Fixed
+- Fix `BUG-009` cross-site display title survivorship in `background.js` (`TASK-20261128-c4y`)
+  - Exported `pickPreferredTitle` in guarded CommonJS `module.exports` and routed both `reconcileAndSync()` queue replay and `SYNC_CHAPTER` title resolution through `pickPreferredTitle(candidateTitle, saved?.title, slug)` while preserving `BUG-006` prototype-key safety and `BUG-008` re-entrancy prefix draining.
+  - Affected files: `background.js`, `test/background.test.js`
+
+### Changed
+- Overhaul `readme.md` with Phase 1–4 architecture, OAuth setup, testing/CI guides, and accurate file tree (`TASK-20261128-c4y`)
+  - Fixed the broken `git clone` link, documented Local-First SWR caching, resilience/guardrails, SPA dwell/scroll gates, Vault UI controls, action badge states, OAuth setup from `manifest.example.json`, `npm test`, `scripts/validate-manifest.js`, LAN preview (`node test/preview/server.js` on port `3456`), and updated the repository directory tree.
+  - Affected files: `readme.md`
+
 ## [Unreleased] — 2026-11-22
 
 ### Added
