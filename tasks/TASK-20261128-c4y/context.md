@@ -1,0 +1,68 @@
+# Context Bundle — Sanctum Phase 4 (Developer Tooling, CI Workflow & Repository Hygiene)
+
+## Relevant Files
+| File | Why It's Relevant |
+|------|------------------|
+| `manifest.json` | Source of truth for MV3 schema (`manifest_version: 3`, `name`, `version`, `description`, `permissions`, `host_permissions`, `oauth2`, `background`, `content_scripts`, `icons`, `action`) and currently holds real `key` (line 4) and `oauth2.client_id` (line 18). Tracked in git (`git ls-files`). |
+| `readme.md` | Currently outdated (58 lines): lists only 3 sites, 3-second sync, alphabetical sorting, `MutationObserver`, broken `git clone` link markdown, direct `manifest.json` editing, and omits SVGs/tests/CI/tooling. |
+| `background.js` | Classic MV3 service worker (1088 lines) with guarded CJS exports (`lines 1059-1088`), `chrome.storage.local` SWR cache, offline `pending_sync` FIFO queue, 3-state `findFile()`, monotonic chapter parser (`parseChapter`, `compareChapterParts`, `shouldUpdateProgress`), slug migration/LWW (`migrateSeriesMap`, `reconcileSeriesMaps`), and `pickPreferredTitle()` (`lines 111-120`). |
+| `content.js` | Classic MV3 content script (375 lines) with guarded CJS exports (`lines 347-375`), 6 `SITE_CONFIGS` domain entries (`asurascans.com`, `asuracomic.net`, `mangahere.cc`, `mangadex.org`, `mangaplus.shueisha.co.jp`, `kunmanga.com`), `window.navigation` + `popstate`/`hashchange` SPA hooks, 8-retry backoff, 15s dwell + `>25%` scroll-depth gate. |
+| `popup.js` | Classic MV3 dashboard script (568 lines) with guarded CJS exports (`lines 543-568`), cache-first `loadVault()`, `DocumentFragment` + `replaceChildren()` batching, `#list` click delegation, `Recently Read` / `A–Z` sort toggle, Kunmanga/site/search filtering, and `isSafeUrl()`. |
+| `popup.html` | Popup UI template (303 lines): `380px` width (`box-sizing: border-box`, `overflow-x: hidden`), `#sort-btn`, `#refresh-btn`, `#search-field`, `#search-btn`, wrapped `#filter-container` with 6 radios (`all`, `asura`, `mangahere`, `mangadex`, `mangaplus`, `kunmanga`). |
+| `test/background.test.js` | Zero-dependency `node:test` + `node:assert/strict` suite (2003 lines, 34 passing tests) covering Drive sync, auth, badges, offline queue, monotonic guards, and LWW migration. |
+| `test/content.test.js` | Zero-dependency `node:test` + `node:assert/strict` suite (760 lines, 21 passing tests) covering `asuraConfig`, `mangadex.org`/`mangaplus.shueisha.co.jp` DOM extractors, retry/dwell/scroll gates, and SPA listeners; currently missing `mangahere.cc` and `kunmanga.com` coverage. |
+| `test/popup.test.js` | Zero-dependency `node:test` + `node:assert/strict` suite (769 lines, 10 passing tests) covering SWR cache render, `interactive` auth flags, `DocumentFragment`, delegation, sort/filter/search, empty states, and `popup.html` invariants. |
+| `test/preview/server.js` | Zero-dependency Node HTTP preview server (`0.0.0.0:3456`) serving `test/preview/index.html` with `mock-chrome.js` and `mock-data.js` (`default`, `empty`, `large`, `error` scenarios). |
+| `.gitignore` | Currently contains only `.qa/`, `.ai-toolbox/`, `MEMORY.md` (does NOT ignore `manifest.json`, which is tracked in git). |
+| `CHANGELOG.md` | Documents Phases 1–3 under `[Unreleased]`; useful reference for accurate Phase 4 docs and release notes. |
+| `MEMORY.md` | Contains `BUG-001`–`BUG-009` and `LESSON-001`–`LESSON-003`; notably flags `BUG-009` (`[Queued for Phase 4]`) in `background.js`. |
+| `docs/IMPLEMENTATION_PLAN.md` | Records Phase 1–4 roadmap and Design Decisions (`D1`–`D6`), including `D6` (`node:test` zero-dependency rule) and Phase 4 tasks `4.1`–`4.3`. |
+| `package.json` | Does not exist yet (verified missing). Needed for `"scripts": { "test": "node --test test/*.test.js" }` and `"type": "commonjs"` with zero dependencies. |
+| `.github/workflows/ci.yml` | Does not exist yet (`.github/` directory missing). Needed for CI test execution and MV3 manifest validation. |
+| `manifest.example.json` | Does not exist yet. Needed with placeholder `key` and `oauth2.client_id`. |
+
+## Reuse Candidates
+- **Existing `test/*.test.js` zero-dependency `node:test` harness (`65/65` tests passing on Node `v22.23.5`):**
+  - `test/background.test.js` (34 tests) + `test/content.test.js` (21 tests) + `test/popup.test.js` (10 tests) already satisfy the `node --test` + `node:assert/strict` architecture (`D6`); extend `test/content.test.js` (and `test/background.test.js` where gaps exist) rather than creating redundant duplicate test files unless a dedicated manifest/validation test is desired.
+- **`background.js` `pickPreferredTitle(primaryTitle, secondaryTitle, slug)` (lines 111–120):** Already implemented and tested via `mergeDuplicateSeriesEntries()`; reuse directly in `reconcileAndSync()` queue replay (lines 729–733) and `SYNC_CHAPTER` (lines 842–846) and export it in `module.exports` (lines 1059–1088) to resolve `BUG-009` (`[Queued for Phase 4]`).
+- **`content.js` `SITE_CONFIGS` & `extractPageMetadata()` (lines 14–74, 146–178):** Already exported cleanly for direct testing of all 6 domain entries (`asurascans.com`, `asuracomic.net`, `mangahere.cc`, `mangadex.org`, `mangaplus.shueisha.co.jp`, `kunmanga.com`).
+- **`test/preview/server.js` (lines 1–97):** Existing zero-dependency LAN preview server (`node test/preview/server.js`) should be documented in `readme.md` under Local Setup & Testing alongside `npm test`.
+- **Node.js built-ins (`node:fs`, `node:path`, `node:assert/strict`, `node:test`):** Sufficient for Manifest V3 JSON syntax & schema validation in CI (no `ajv`, `eslint`, or third-party dependencies needed, honoring zero-dependency constraint).
+
+## Patterns to Follow
+- **Zero-Dependency CommonJS (`LESSON-001`, `D6`):** All source and test scripts use CommonJS (`require`, `if (typeof module !== "undefined" && module.exports)`), `"type": "commonjs"` in `package.json`, `node:test` + `node:assert/strict`, and zero `dependencies`/`devDependencies`.
+- **Guarded Browser Globals in MV3 Classic Scripts:** See `background.js:1040-1088`, `content.js:343-375`, `popup.js:534-568` — browser globals (`window`, `document`, `chrome`, `navigator`, `self`) and auto-initialization (`typeof module === "undefined"`) remain guarded so Chrome MV3 runs scripts without a bundler while Node runs unit tests directly.
+- **Exact MV3 Manifest Structure:** See `manifest.json:1-53` — `manifest.example.json` must preserve identical top-level keys (`manifest_version`, `name`, `key`, `version`, `description`, `permissions`, `host_permissions`, `oauth2`, `background`, `content_scripts`, `icons`, `action`) while replacing only `key` (`"YOUR_EXTENSION_PUBLIC_KEY_HERE"`) and `oauth2.client_id` (`"YOUR_GOOGLE_CLIENT_ID_HERE.apps.googleusercontent.com"`).
+- **Task & Documentation Format:** See `tasks/TASK-20261122-fij.md` and `CHANGELOG.md` — keep `readme.md` metrics strictly aligned with observed codebase values (`15` seconds dwell, `>25%` scroll depth, `8` retries at `1000ms`, `3000ms` OK badge clear, `380px` popup width, `6` domain configs / `5` site filter radios + `All`, `65+` unit tests).
+
+## Anti-Patterns Flagged
+- **`test/content.test.js` coverage gaps for `SITE_CONFIGS`:**
+  - `SITE_CONFIGS["mangahere.cc"]` (`content.js:17-22`) has **0 unit tests** (regex, `_` -> space title transform, decimal chapters).
+  - `SITE_CONFIGS["kunmanga.com"]` (`content.js:64-73`) has **0 unit tests** (regex, `-` -> space title transform, chapter number extraction).
+  - `SITE_CONFIGS["mangadex.org"].regex` (`content.js:24`) and `SITE_CONFIGS["mangaplus.shueisha.co.jp"].regex` (`content.js:42`) are never asserted directly against URL paths (existing tests pass `null` as the `match` argument to `getChapter(null, doc)`).
+  - `SITE_CONFIGS["asurascans.com"]` domain matching via `extractPageMetadata()` is untested (only `asuracomic.net` is exercised via `checkPage`/`extractPageMetadata`).
+- **`test/background.test.js` helper coverage gaps:**
+  - `compareChapterParts` (imported line 25), `mergeDuplicateSeriesEntries` (imported line 20), and `reconcileSeriesMaps` (imported line 22) are never invoked directly in assertions (only indirectly through `shouldUpdateProgress`, `migrateSeriesMap`, and `reconcileAndSync`).
+- **`content.js` line 71 (`kunmanga.com` `getChapter`):** Returns `"Reading"` fallback instead of `null` when `match[2]` has no digits (flagged only; `isValidChapter("Reading")` downstream rejects it safely).
+- **`background.js` lines 729–733 & 842–846 (`BUG-009`):** `reconcileAndSync()` and `SYNC_CHAPTER` evaluate `explicitTitle || ... || saved?.title` instead of `pickPreferredTitle(...)`, allowing a lowercase URL-slug title (`"solo leveling"`) from a fresh cache to overwrite an existing mixed-case display title (`"Solo Leveling"`).
+- **`readme.md` stale/broken content:**
+  - Line 23: `git clone [https://github.com/...](https://github.com/...)` has markdown link syntax inside a fenced bash block.
+  - Lines 8–12: Omits `asuracomic.net`, `mangaplus.shueisha.co.jp`, and `kunmanga.com`.
+  - Lines 12, 14, 45: Still documents pre-Phase-1–3 behavior (`3 seconds`, `Alphabetical Sorting`, `MutationObserver`).
+  - Lines 31–34: Instructs editing tracked `manifest.json` directly without referencing `manifest.example.json` or `npm test`.
+  - Lines 50–58: File tree omits `arrow-right.svg`, `magnify.svg`, `refresh.svg`, `trash.svg`, `test/`, `docs/`, `CHANGELOG.md`, `package.json`, `manifest.example.json`, `.github/`.
+- **Tracked `manifest.json` credential note:** `manifest.json` is currently tracked in git (`git ls-files`) with real `key` and `oauth2.client_id`. Do NOT silently delete or `.gitignore` a tracked file without explicit scope/approval; keep CI validating `manifest.example.json` (and `manifest.json` if present) cleanly.
+
+## MEMORY.md Notes
+- **BUG-001** (`API Integration` — Google Drive History Sync): Never fall back to `{ series: {} }` on `JSON.parse` errors or non-plain-object/array payloads; treat only `!text.trim()` or `404` as uninitialized and abort before `PATCH` while calling `setErrorBadge()`.
+- **BUG-002** (`UI State` — Extension Action Badge State): Track delayed badge clear timers (`badgeClearTimer`) at module scope in `background.js` and invoke `clearBadgeTimer()` before every badge state transition (`setErrorBadge`, `setInFlightBadge`, `setSuccessBadge`, `clearBadge`).
+- **BUG-003** (`UI State` — Extension Popup Box-Sizing & Viewport Dimensions): Popup HTML (`popup.html`) must preserve `* { box-sizing: border-box; }`, `body { width: 380px; overflow-x: hidden; }`, and `flex-wrap: wrap` on `#filter-container`.
+- **BUG-004** (`API Integration` — Offline Sync Fallback Queue): Remote Drive helpers and `reconcileAndSync()` must return structured `{ status, error }` results rather than throwing unhandled rejections that bypass `pending_sync` queuing.
+- **BUG-005** (`Auth & Permissions` — Background-Coordinated OAuth Sync): Keep background service-worker OAuth calls silent (`{ interactive: false }`), passing `{ interactive: true }` only from foreground user gestures (`#refresh-btn`) or empty-cache onboarding (`!hasCachedData`).
+- **BUG-006** (`Architecture` — Untrusted Web Metadata Map Keys): Reject reserved prototype keys (`__proto__`, `constructor`, `prototype`, case-insensitive/trimmed) and guard every dynamic lookup on `series` objects with `Object.hasOwn()` or `Object.create(null)`.
+- **BUG-007** (`UI State` — SPA Route-Change Metadata Extraction): Never snapshot DOM-derived metadata synchronously on `window.navigation` / `history.pushState`; re-extract metadata via `extractPageMetadata()` after the 15s dwell settle window before dispatching `SYNC_CHAPTER`.
+- **BUG-008** (`Architecture` — Offline Queue Re-entrancy Reconciliation): Snapshot `pendingQueue.length` before async Drive `PATCH` in `reconcileAndSync()`, then re-read `pending_sync` afterward and write back `currentPending.slice(snapshotCount)` — never overwrite with `[]`.
+- **BUG-009** (`Architecture` — Cross-Site Display Title Survivorship, **[Queued for Phase 4]**): URL-based extractors (`asura`, `mangahere`, `kunmanga`) emit lowercase names (`"solo leveling"`) while DOM extractors (`mangadex`, `mangaplus`) emit mixed-case titles (`"Solo Leveling"`). `SYNC_CHAPTER` (`background.js:838-846`) and `reconcileAndSync()` (`background.js:729-733`) currently evaluate `explicitTitle || ... || saved?.title` directly instead of calling `pickPreferredTitle(candidateTitle, saved?.title, slug)`, allowing a lowercase slug on a fresh cache to overwrite mixed-case `saved.title` on Google Drive. Resolution queued for Phase 4: route both sites' title survivorship through `pickPreferredTitle()`.
+- **LESSON-001** (`Tooling / Harness` — MV3 Classic Script Unit Testing): Export real production functions via guarded CommonJS (`if (typeof module !== "undefined" && module.exports)`) with browser global (`typeof window`/`document`/`chrome`) and auto-init (`typeof module === "undefined"`) guards so classic MV3 scripts run in both Chrome and `node --test`; never replace production code with `simulate*` helpers.
+- **LESSON-002** (`Tooling / Harness` — Remote / Headless Extension Live Testing): Maintain the zero-dependency LAN preview harness (`test/preview/server.js` on port `3456` with `index.html`, `mock-chrome.js`, `mock-data.js`) for browserless/LAN popup verification.
+- **LESSON-003** (`Tooling / Harness` — PR Description Format): Whenever generating or updating PR descriptions (`/pr-details`, `gh pr create`/`edit`) in this repo, include a Mermaid `Before vs. After` (`flowchart TD`) architecture diagram under `## Summary` and expand `## Evidence` into both a per-suite unit test table and individual case-by-case live verification tables (`Case 1..N`).

@@ -758,3 +758,214 @@ test("extractPageMetadata & maybeDispatchSync: re-extracts fresh chapter metadat
     delete global.chrome;
   }
 });
+
+test("MangaHere: regex, underscore-to-space title transform, decimal chapters, and extractPageMetadata()", () => {
+  const config = SITE_CONFIGS["mangahere.cc"];
+  assert.ok(config, "SITE_CONFIGS must include mangahere.cc");
+
+  const cases = [
+    {
+      pathname: "/manga/solo_leveling/c150/1.html",
+      expectedTitle: "solo leveling",
+      expectedChapter: "150",
+    },
+    {
+      pathname: "/manga/tower_of_god/c42.5/",
+      expectedTitle: "tower of god",
+      expectedChapter: "42.5",
+    },
+    {
+      pathname: "/manga/one_piece/c0/",
+      expectedTitle: "one piece",
+      expectedChapter: "0",
+    },
+  ];
+
+  for (const { pathname, expectedTitle, expectedChapter } of cases) {
+    const match = pathname.match(config.regex);
+    assert.ok(match, `Path ${pathname} must match mangahere.cc regex`);
+    assert.equal(config.getTitle(match), expectedTitle);
+    assert.equal(match[config.chapterIndex], expectedChapter);
+  }
+
+  assert.equal("/manga/solo_leveling/".match(config.regex), null, "Series index must not match");
+
+  try {
+    global.window = {
+      location: {
+        hostname: "www.mangahere.cc",
+        pathname: "/manga/tower_of_god/c42.5/1.html",
+        href: "https://www.mangahere.cc/manga/tower_of_god/c42.5/1.html",
+      },
+    };
+    global.document = {};
+
+    const meta = extractPageMetadata();
+    assert.deepEqual(meta, {
+      manga: "tower of god",
+      chapter: "42.5",
+      url: "https://www.mangahere.cc/manga/tower_of_god/c42.5/1.html",
+      site: "mangahere.cc",
+    });
+
+    global.window.location.pathname = "/manga/tower_of_god/";
+    global.window.location.href = "https://www.mangahere.cc/manga/tower_of_god/";
+    assert.equal(extractPageMetadata(), null, "Non-chapter MangaHere page must return null");
+  } finally {
+    delete global.window;
+    delete global.document;
+  }
+});
+
+test("Kunmanga: regex, hyphen-to-space title transform, chapter extraction, 'Reading' rejection, and extractPageMetadata()", () => {
+  const config = SITE_CONFIGS["kunmanga.com"];
+  assert.ok(config, "SITE_CONFIGS must include kunmanga.com");
+
+  const intMatch = "/manga/nano-machine/chapter-215/".match(config.regex);
+  assert.ok(intMatch);
+  assert.equal(config.getTitle(intMatch), "nano machine");
+  assert.equal(config.getChapter(intMatch), "215");
+
+  const decMatch = "/manga/solo-max-level-newbie/chapter-42.5/".match(config.regex);
+  assert.ok(decMatch);
+  assert.equal(config.getTitle(decMatch), "solo max level newbie");
+  assert.equal(config.getChapter(decMatch), "42.5");
+
+  // Non-numeric segment returns "Reading" fallback from getChapter(), safely rejected by isValidChapter()
+  const nonNumericMatch = "/manga/nano-machine/prologue/".match(config.regex);
+  assert.ok(nonNumericMatch);
+  assert.equal(config.getChapter(nonNumericMatch), "Reading");
+  assert.equal(isValidChapter(config.getChapter(nonNumericMatch)), false);
+
+  assert.equal("/manga/nano-machine/".match(config.regex), null, "Series overview must not match");
+
+  try {
+    global.window = {
+      location: {
+        hostname: "kunmanga.com",
+        pathname: "/manga/nano-machine/chapter-215/",
+        href: "https://kunmanga.com/manga/nano-machine/chapter-215/",
+      },
+    };
+    global.document = {};
+
+    assert.deepEqual(extractPageMetadata(), {
+      manga: "nano machine",
+      chapter: "215",
+      url: "https://kunmanga.com/manga/nano-machine/chapter-215/",
+      site: "kunmanga.com",
+    });
+
+    // Prologue (no digits) must be rejected by extractPageMetadata()
+    global.window.location.pathname = "/manga/nano-machine/prologue/";
+    global.window.location.href = "https://kunmanga.com/manga/nano-machine/prologue/";
+    assert.equal(extractPageMetadata(), null, "Kunmanga 'Reading' fallback must be rejected");
+  } finally {
+    delete global.window;
+    delete global.document;
+  }
+});
+
+test("MangaDex & MangaPlus: direct URL regex assertions and extractPageMetadata() integration", () => {
+  const mdConfig = SITE_CONFIGS["mangadex.org"];
+  const mpConfig = SITE_CONFIGS["mangaplus.shueisha.co.jp"];
+
+  // MangaDex regex assertions
+  const mdMatch = "/chapter/8b9c1234-5678-4abc-9def-0123456789ab/3".match(mdConfig.regex);
+  assert.ok(mdMatch, "MangaDex chapter path must match regex");
+  assert.equal(mdMatch[1], "8b9c1234-5678-4abc-9def-0123456789ab");
+  assert.equal("/title/8b9c1234-5678-4abc-9def-0123456789ab/solo-leveling".match(mdConfig.regex), null);
+
+  // MangaPlus regex assertions
+  const mpMatch = "/viewer/1021456".match(mpConfig.regex);
+  assert.ok(mpMatch, "MangaPlus viewer path must match regex");
+  assert.equal(mpMatch[1], "1021456");
+  assert.equal("/titles/100020".match(mpConfig.regex), null);
+  assert.equal("/viewer/not-numeric".match(mpConfig.regex), null);
+
+  try {
+    // MangaDex extractPageMetadata()
+    global.window = {
+      location: {
+        hostname: "mangadex.org",
+        pathname: "/chapter/8b9c1234-5678-4abc-9def-0123456789ab",
+        href: "https://mangadex.org/chapter/8b9c1234-5678-4abc-9def-0123456789ab",
+      },
+    };
+    global.document = {
+      querySelector: (selector) => {
+        if (selector === "a.reader--header-manga") return { innerText: "Solo Leveling" };
+        if (selector === "div.reader--meta.chapter") return { innerText: "Chapter 150.5" };
+        return null;
+      },
+    };
+    assert.deepEqual(extractPageMetadata(), {
+      manga: "Solo Leveling",
+      chapter: "150.5",
+      url: "https://mangadex.org/chapter/8b9c1234-5678-4abc-9def-0123456789ab",
+      site: "mangadex.org",
+    });
+
+    // MangaPlus extractPageMetadata()
+    global.window = {
+      location: {
+        hostname: "mangaplus.shueisha.co.jp",
+        pathname: "/viewer/1021456",
+        href: "https://mangaplus.shueisha.co.jp/viewer/1021456",
+      },
+    };
+    global.document = {
+      querySelector: (selector) => {
+        if (selector === "h1[class*='Navigation-module_title']") return { innerText: "One Piece" };
+        if (selector === "p[class*='Navigation-module_chapterTitle']") return { innerText: "#1130" };
+        return null;
+      },
+    };
+    assert.deepEqual(extractPageMetadata(), {
+      manga: "One Piece",
+      chapter: 1130,
+      url: "https://mangaplus.shueisha.co.jp/viewer/1021456",
+      site: "mangaplus.shueisha.co.jp",
+    });
+  } finally {
+    delete global.window;
+    delete global.document;
+  }
+});
+
+test("Asura Scans (asurascans.com): extractPageMetadata() resolves apex and subdomain hostnames", () => {
+  try {
+    global.document = {};
+
+    global.window = {
+      location: {
+        hostname: "asurascans.com",
+        pathname: "/comics/solo-leveling-8a7b6c5d/chapter/150",
+        href: "https://asurascans.com/comics/solo-leveling-8a7b6c5d/chapter/150",
+      },
+    };
+    assert.deepEqual(extractPageMetadata(), {
+      manga: "solo leveling",
+      chapter: "150",
+      url: "https://asurascans.com/comics/solo-leveling-8a7b6c5d/chapter/150",
+      site: "asurascans.com",
+    });
+
+    global.window = {
+      location: {
+        hostname: "www.asurascans.com",
+        pathname: "/series/nano-machine/chapter/12-1",
+        href: "https://www.asurascans.com/series/nano-machine/chapter/12-1",
+      },
+    };
+    assert.deepEqual(extractPageMetadata(), {
+      manga: "nano machine",
+      chapter: "12-1",
+      url: "https://www.asurascans.com/series/nano-machine/chapter/12-1",
+      site: "asurascans.com",
+    });
+  } finally {
+    delete global.window;
+    delete global.document;
+  }
+});
